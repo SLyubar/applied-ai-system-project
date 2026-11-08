@@ -69,7 +69,12 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In 
    python -m pytest
    ```
 
-7. **(Planned) Run the evaluation harness.** The exact command will be added when the harness is built.
+7. **Run the evaluation harness.** It scores the pipeline against the human-judged golden set in `data/golden_set.json` and prints a report. Use `--out` to save it and `--strict` to exit non-zero on any failure.
+
+   ```bash
+   python -m src.evaluation
+   python -m src.evaluation --out reports/baseline.md --label "my run"
+   ```
 
 ## Sample Interactions
 
@@ -145,7 +150,22 @@ Energy `1.50` is likewise clamped to 1.0 with the warning `energy 1.5 is out of 
 - Unknown genres and moods fell back to energy-only ranking with no warning.
 - Review was manual, so nothing would catch a regression if the weights changed.
 
-**What the new system will add (planned).** Pytest tests for score bounds and ranking determinism, guardrail tests for clamping and normalization, a golden-set evaluation reporting precision@k and consistency, and a side-by-side comparison of the original recommender against the RAG version.
+**Baseline evaluation (implemented).** `python -m src.evaluation` runs 10 ranking cases and 15 free-text parser cases from a human-judged golden set. The saved baseline is in [reports/baseline.md](reports/baseline.md):
+
+| Metric | Baseline |
+|---|---|
+| Mean precision@5 | 0.68 |
+| Top-1 result relevant | 100% (8 of 8 scored cases) |
+| Ranking cases passed | 10/10 |
+| Parser accuracy, easy phrasings | 10/10 |
+| Parser accuracy, hard phrasings | 1/5 |
+| Repeat runs identical | yes |
+
+What this tells me: the scorer itself is doing its job on well-formed profiles, so the headroom is in understanding language. The keyword parser fails on phrasings such as "music to fall asleep to" (it only knows "sleep"), "something happy and danceable" and "background music while I work". Those are the cases the Claude parser should win, and the same golden set will measure whether it does. The ranking numbers are already high, so I don't expect the embedding retriever to move them much. If it doesn't, that is a result worth reporting honestly.
+
+Caveats: the golden set is small, I drafted the relevance judgments myself, and the `relevant_ids` lists are fairly generous, which makes the ranking metrics easy to satisfy. The 79 pytest tests also guard the metrics, the golden-set format and the baseline.
+
+**Still planned.** A side-by-side comparison of this baseline against the Claude parser and embedding retriever once they exist.
 
 **What I learned so far.** Hand-reading output doesn't scale, and the failures worth catching are the quiet ones: results that look plausible but are wrong. That is the main reason the testing system is part of the plan.
 
