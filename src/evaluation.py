@@ -7,6 +7,7 @@ planned Claude parser and embedding retriever.
 
 import argparse
 import json
+import math
 import sys
 from typing import Callable, Dict, List, Sequence, Tuple
 
@@ -44,6 +45,42 @@ def reciprocal_rank(ranked: Sequence[int], relevant: Sequence[int]) -> float:
     return 0.0
 
 
+IDEAL_GRADE = 2       # a song the listener would be delighted to get
+ACCEPTABLE_GRADE = 1  # a song the listener would be fine with
+
+
+def case_grades(case: Dict) -> Dict[int, int]:
+    """Map song id -> relevance grade for a ranking case (ideal beats acceptable)."""
+    grades = {song_id: ACCEPTABLE_GRADE for song_id in case.get("acceptable_ids", [])}
+    grades.update({song_id: IDEAL_GRADE for song_id in case.get("ideal_ids", [])})
+    return grades
+
+
+def ndcg_at_k(ranked: Sequence[int], grades: Dict[int, int], k: int) -> float:
+    """Normalized discounted cumulative gain: 1.0 means the best possible top k.
+
+    Uses the grade itself as the gain and a 1/log2(rank + 1) position discount, so
+    putting an ideal song first counts for more than putting it fifth.
+    """
+    if k <= 0:
+        raise ValueError("k must be positive")
+    if not grades:
+        return 0.0
+
+    def dcg(gains: Sequence[int]) -> float:
+        return sum(gain / math.log2(position + 1) for position, gain in enumerate(gains, start=1))
+
+    actual = dcg([grades.get(song_id, 0) for song_id in ranked[:k]])
+    best = dcg(sorted(grades.values(), reverse=True)[:k])
+    return actual / best if best else 0.0
+
+
+def forbidden_in_top_k(ranked: Sequence[int], forbidden: Sequence[int], k: int) -> List[int]:
+    """Songs that must not be recommended but appear in the top k."""
+    banned = set(forbidden)
+    return [song_id for song_id in ranked[:k] if song_id in banned]
+
+
 def check_parse(profile: Dict, expected: Dict) -> List[str]:
     """Return the names of expected fields the parsed profile got wrong.
 
@@ -78,34 +115,85 @@ def load_golden(path: str = GOLDEN_PATH) -> Dict:
         return json.load(f)
 
 
-def evaluate_ranking(cases: List[Dict], songs: List[Dict], rank_fn: RankFn, k: int = DEFAULT_K) -> List[Dict]:
-    """Run every ranking case and return one result dict per case."""
+def evaluate_ranking(
+    cases: List[Dict],
+    songs: List[Dict],
+    rank_fn: RankFn,
+    k: int = DEFAULT_K,
+    parse_fn: ParseFn = None,
+) -> List[Dict]:
+    """Run every ranking case and return one result dict per case.
+
+    A case supplies either a ready `profile` or a free-text `query`. Queries are
+    parsed with `parse_fn` (the keyword parser by default), so those cases test the
+    whole pipeline end to end.
+
+    A case passes only if every applicable check holds. These criteria are fixed in
+    advance, not tuned to results:
+      - top-1 is a relevant song (ideal or acceptable)
+      - no forbidden song appears in the top k
+      - at least one ideal song appears in the top 3 (when the case lists ideal songs)
+      - the input produced a warning (when expect_warning is set)
+      - the ranking equals another case's ranking (when equivalent_to is set)
+    """
+    if parse_fn is None:
+        parse_fn = get_parse_fn("keyword")
+    genres, moods = known_labels(songs)
     results: List[Dict] = []
     by_name: Dict[str, List[int]] = {}
 
     for case in cases:
-        ranked, warnings = rank_fn(case["profile"], songs, k)
+        fell_back = False
+        parse_error = None
+        if "query" in case:
+            try:
+                profile, notes = parse_fn(case["query"], genres, moods)
+                fell_back = any(n.startswith(FALLBACK_NOTE_PREFIX) for n in notes)
+            except ValueError as error:
+                profile, parse_error = None, str(error)
+        else:
+            profile = case["profile"]
+
+        if profile is None:
+            ranked, warnings = [], [f"query could not be parsed: {parse_error}"]
+        else:
+            ranked, warnings = rank_fn(profile, songs, k)
         by_name[case["name"]] = ranked
-        relevant = case.get("relevant_ids", [])
-        has_truth = bool(relevant)
+
+        grades = case_grades(case)
+        has_truth = bool(grades)
         result = {
             "name": case["name"],
             "ranked": ranked,
             "warnings": warnings,
             "has_ground_truth": has_truth,
+            "is_query": "query" in case,
+            "fell_back": fell_back,
             "expect_warning": case.get("expect_warning", False),
             "equivalent_to": case.get("equivalent_to"),
+            "forbidden_hits": forbidden_in_top_k(ranked, case.get("forbidden_ids", []), k),
         }
         if has_truth:
-            result["precision"] = precision_at_k(ranked, relevant, k)
-            result["rr"] = reciprocal_rank(ranked, relevant)
-            result["top1_hit"] = bool(ranked) and ranked[0] in set(relevant)
+            result["precision"] = precision_at_k(ranked, list(grades), k)
+            result["rr"] = reciprocal_rank(ranked, list(grades))
+            result["ndcg"] = ndcg_at_k(ranked, grades, k)
+            result["top1_hit"] = bool(ranked) and ranked[0] in grades
+            ideal = set(case.get("ideal_ids", []))
+            result["ideal_in_top3"] = bool(ideal & set(ranked[:3])) if ideal else None
         results.append(result)
 
-    for result in results:
+    for case, result in zip(cases, results):
         checks: List[Tuple[str, bool]] = []
         if result["has_ground_truth"]:
             checks.append(("top-1 is relevant", result["top1_hit"]))
+        if case.get("forbidden_ids"):
+            checks.append((
+                "no forbidden songs in top k" if not result["forbidden_hits"]
+                else f"forbidden songs in top k: {result['forbidden_hits']}",
+                not result["forbidden_hits"],
+            ))
+        if result.get("ideal_in_top3") is not None:
+            checks.append(("an ideal song is in the top 3", result["ideal_in_top3"]))
         if result["expect_warning"]:
             checks.append(("warns about the input", bool(result["warnings"])))
         if result["equivalent_to"]:
@@ -139,8 +227,12 @@ def evaluate_parser(cases: List[Dict], songs: List[Dict], parse_fn: ParseFn) -> 
 
 
 def is_deterministic(cases: List[Dict], songs: List[Dict], rank_fn: RankFn, k: int = DEFAULT_K) -> bool:
-    """True if running every case twice gives identical rankings and warnings."""
-    return all(rank_fn(c["profile"], songs, k) == rank_fn(c["profile"], songs, k) for c in cases)
+    """True if running every profile case twice gives identical rankings and warnings.
+
+    Query cases are skipped: with a live LLM parser they are not expected to repeat exactly.
+    """
+    profile_cases = [c for c in cases if "profile" in c]
+    return all(rank_fn(c["profile"], songs, k) == rank_fn(c["profile"], songs, k) for c in profile_cases)
 
 
 def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
@@ -156,6 +248,7 @@ def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
 
     return {
         "mean_precision": mean([r["precision"] for r in scored]),
+        "mean_ndcg": mean([r["ndcg"] for r in scored]),
         "mrr": mean([r["rr"] for r in scored]),
         "top1_rate": mean([1.0 if r["top1_hit"] else 0.0 for r in scored]),
         "ranking_cases_passed": sum(1 for r in ranking if r["passed"]),
@@ -166,6 +259,9 @@ def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
         "parser_passed": sum(1 for p in parsing if p["passed"]),
         "parser_total": len(parsing),
         "parser_fallbacks": sum(1 for p in parsing if p.get("fell_back")),
+        "ranking_query_cases": sum(1 for r in ranking if r.get("is_query")),
+        "ranking_fallbacks": sum(1 for r in ranking if r.get("fell_back")),
+        "forbidden_hits": sum(len(r["forbidden_hits"]) for r in ranking),
     }
 
 
@@ -191,24 +287,30 @@ def format_report(
         "| Metric | Value |",
         "|---|---|",
         f"| Mean precision@{k} | {s['mean_precision']:.2f} |",
+        f"| Mean nDCG@{k} | {s['mean_ndcg']:.2f} |",
         f"| Mean reciprocal rank | {s['mrr']:.2f} |",
         f"| Top-1 relevant rate | {s['top1_rate']:.0%} |",
         f"| Ranking cases passed | {s['ranking_cases_passed']}/{s['ranking_cases_total']} |",
         f"| Parser accuracy (all) | {s['parser_passed']}/{s['parser_total']} ({s['parser_overall']:.0%}) |",
         f"| Parser accuracy (easy / hard) | {s['parser_easy']:.0%} / {s['parser_hard']:.0%} |",
         f"| Deterministic (repeat runs identical) | {'yes' if deterministic else 'NO'} |",
-        f"| Parser answers that fell back to keywords | {s['parser_fallbacks']}/{s['parser_total']} |",
+        f"| Forbidden songs recommended (top {k}) | {s['forbidden_hits']} |",
+        f"| Answers that fell back to keywords | "
+        f"{s['parser_fallbacks'] + s['ranking_fallbacks']}/{s['parser_total'] + s['ranking_query_cases']} |",
         "",
         "## Ranking cases",
         "",
-        f"| Case | P@{k} | RR | Result | Top 3 |",
-        "|---|---|---|---|---|",
+        f"| Case | Input | P@{k} | nDCG@{k} | Result | Top 3 |",
+        "|---|---|---|---|---|---|",
     ]
     for r in ranking:
         precision = f"{r['precision']:.2f}" if r["has_ground_truth"] else "n/a"
-        rr = f"{r['rr']:.2f}" if r["has_ground_truth"] else "n/a"
+        ndcg = f"{r['ndcg']:.2f}" if r["has_ground_truth"] else "n/a"
         top3 = "; ".join(titles.get(i, str(i)) for i in r["ranked"][:3])
-        lines.append(f"| {r['name']} | {precision} | {rr} | {'PASS' if r['passed'] else 'FAIL'} | {top3} |")
+        kind = "query" if r["is_query"] else "profile"
+        lines.append(
+            f"| {r['name']} | {kind} | {precision} | {ndcg} | {'PASS' if r['passed'] else 'FAIL'} | {top3} |"
+        )
 
     failed_ranking = [r for r in ranking if not r["passed"]]
     if failed_ranking:
@@ -229,10 +331,11 @@ def format_report(
         "",
         "- The golden set is a set of human judgments. Check `data/golden_set.json` before trusting any number above.",
     ]
-    if s["parser_fallbacks"]:
+    fallbacks = s["parser_fallbacks"] + s["ranking_fallbacks"]
+    if fallbacks:
         lines.append(
-            f"- **{s['parser_fallbacks']} parser answer(s) came from the keyword fallback, not Claude.** "
-            "The parser numbers above do not measure Claude alone. Check credentials and network, then re-run."
+            f"- **{fallbacks} answer(s) came from the keyword fallback, not Claude.** "
+            "The numbers above do not measure Claude alone. Check credentials and network, then re-run."
         )
     if no_truth:
         lines.append(f"- Cases with no ground truth, checked only for warnings: {', '.join(no_truth)}.")
@@ -258,8 +361,9 @@ def main(argv: Sequence[str] = None) -> int:
     songs = load_songs(SONGS_PATH)
     golden = load_golden()
 
-    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k)
-    parsing = evaluate_parser(golden["parser_cases"], songs, get_parse_fn(args.parser))
+    parse_fn = get_parse_fn(args.parser)
+    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k, parse_fn)
+    parsing = evaluate_parser(golden["parser_cases"], songs, parse_fn)
     deterministic = is_deterministic(golden["ranking_cases"], songs, baseline_rank, args.k)
 
     report = format_report(ranking, parsing, deterministic, songs, args.k, args.label)

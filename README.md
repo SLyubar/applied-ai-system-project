@@ -154,20 +154,24 @@ Energy `1.50` is likewise clamped to 1.0 with the warning `energy 1.5 is out of 
 - Unknown genres and moods fell back to energy-only ranking with no warning.
 - Review was manual, so nothing would catch a regression if the weights changed.
 
-**Baseline evaluation (implemented).** `python -m src.evaluation` runs 10 ranking cases and 15 free-text parser cases from a human-judged golden set. The saved baseline is in [reports/baseline.md](reports/baseline.md):
+**Baseline evaluation (implemented).** `python -m src.evaluation` runs 22 ranking cases (16 profiles and 6 free-text queries parsed end to end) and 15 parser cases from a human-judged golden set. Each ranking case grades songs as *ideal* or *acceptable* and lists *forbidden* songs that must not appear in the top 5. A case passes only if the top result is relevant, no forbidden song appears, and an ideal song is in the top 3. I fixed these criteria before looking at results. The saved baseline is in [reports/baseline.md](reports/baseline.md):
 
 | Metric | Baseline |
 |---|---|
-| Mean precision@5 | 0.68 |
-| Top-1 result relevant | 100% (8 of 8 scored cases) |
-| Ranking cases passed | 10/10 |
+| Mean precision@5 | 0.73 |
+| Mean nDCG@5 | 0.74 |
+| Top-1 result relevant | 85% |
+| Ranking cases passed | 19/22 |
+| Forbidden songs recommended | 0 |
 | Parser accuracy, easy phrasings | 10/10 |
 | Parser accuracy, hard phrasings | 1/5 |
-| Repeat runs identical | yes |
+| Repeat runs identical (profile cases) | yes |
 
-What this tells me: the scorer itself is doing its job on well-formed profiles, so the headroom is in understanding language. The keyword parser fails on phrasings such as "music to fall asleep to" (it only knows "sleep"), "something happy and danceable" and "background music while I work". Those are the cases the Claude parser should win, and the same golden set will measure whether it does. The ranking numbers are already high, so I don't expect the embedding retriever to move them much. If it doesn't, that is a result worth reporting honestly.
+**An earlier, looser golden set hid the weaknesses.** My first version used one flat list of "relevant" songs per case and scored 100% top-1 on 8 scored cases. Grading relevance, adding forbidden songs, and adding end-to-end queries lowered the top-1 rate to 85% without changing the system at all, so the earlier number was measuring how generous my judgments were.
 
-Caveats: the golden set is small, I drafted the relevance judgments myself, and the `relevant_ids` lists are fairly generous, which makes the ranking metrics easy to satisfy. The 79 pytest tests also guard the metrics, the golden-set format and the baseline.
+What this tells me: all 16 profile cases pass, so the scorer is doing its job when it gets a well-formed profile. All 3 failures are free-text queries the keyword parser misunderstands: "music to fall asleep to" (it only knows "sleep"), "songs that feel like a warm hug" (no cue words at all, so it falls back to a mid-energy default and recommends unrelated songs), and "something happy and danceable" (an ideal song misses the top 3). Those are the cases the Claude parser should win, and the same golden set will measure whether it does. The ranking numbers on profile cases are already high, so I don't expect the embedding retriever to move them much. If it doesn't, that is a result worth reporting honestly.
+
+Caveats: the golden set is still small (22 ranking and 15 parser cases), and I drafted all the judgments myself, so they reflect my taste. One judgment is arguable: "Sunday Brunch Swing" (a lively happy swing tune) is the keyword baseline's top answer to "something happy and danceable" and could reasonably count as acceptable. I left it out rather than adjust the golden set after seeing results. The 116 pytest tests also guard the metrics, the golden-set format and the baseline.
 
 **Claude parser tests (implemented).** 21 tests use a fake client, so no network or key is needed. They check the request shape (model, structured output, no sampling parameters), that invented labels and out-of-range energy are cleaned up, that user text is passed as data rather than instructions, and that each failure path (API error, refusal, empty output, missing credentials) falls back to the keyword parser. This tests my code around Claude, not how well Claude understands music requests.
 

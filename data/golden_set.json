@@ -1,102 +1,685 @@
 {
-  "_comment": "Human-judged expectations, NOT derived from the scoring formula. relevant_ids are songs a listener with that profile would plausibly be happy to get (ids from data/songs.csv). Review and edit these; the evaluation is only as good as this file.",
+  "_comment": "Human-judged expectations, NOT derived from the scoring formula. Each ranking case gives either a ready 'profile' or a free-text 'query' (parsed first, so it tests the whole pipeline). ideal_ids = songs the listener would be delighted by (grade 2); acceptable_ids = fine (grade 1); forbidden_ids = songs that must NOT appear in the top k. All ids refer to data/songs.csv. Review and edit this file; the evaluation is only as good as these judgments.",
   "ranking_cases": [
     {
       "name": "Starter lofi",
-      "profile": {"genre": "lofi", "mood": "chill", "energy": 0.4, "likes_acoustic": true},
-      "relevant_ids": [2, 4, 9, 21, 6, 28],
-      "notes": "Quiet acoustic lofi plus the calmest ambient tracks."
+      "profile": {
+        "genre": "lofi",
+        "mood": "chill",
+        "energy": 0.4,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        4,
+        2,
+        21
+      ],
+      "acceptable_ids": [
+        9,
+        6,
+        28,
+        7
+      ],
+      "forbidden_ids": [
+        3,
+        14,
+        17,
+        57,
+        58,
+        48
+      ],
+      "notes": "Quiet acoustic lofi is ideal; focused lofi and the calmest ambient or jazz are fine."
     },
     {
       "name": "Pop workout",
-      "profile": {"genre": "pop", "mood": "chill", "energy": 0.9, "likes_acoustic": false},
-      "relevant_ids": [5, 22, 1, 48, 72, 14, 19, 71],
-      "notes": "The 'chill' mood contradicts a workout; a listener would want loud, non-acoustic, high-energy tracks."
+      "profile": {
+        "genre": "pop",
+        "mood": "chill",
+        "energy": 0.9,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [
+        5,
+        22
+      ],
+      "acceptable_ids": [
+        1,
+        48,
+        72,
+        71,
+        14,
+        19,
+        63,
+        49
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        27,
+        60,
+        13
+      ],
+      "notes": "'chill' contradicts a workout. Loud non-acoustic pop is ideal; other high-energy genres are acceptable."
     },
     {
       "name": "Rock intense",
-      "profile": {"genre": "rock", "mood": "intense", "energy": 0.7, "likes_acoustic": true},
-      "relevant_ids": [3, 24, 25, 26],
-      "notes": "All rock songs in the catalog."
+      "profile": {
+        "genre": "rock",
+        "mood": "intense",
+        "energy": 0.7,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        3,
+        24
+      ],
+      "acceptable_ids": [
+        25,
+        26,
+        57
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        60,
+        27
+      ],
+      "notes": "Intense or angry rock is ideal; the other rock songs and intense metal are acceptable."
     },
     {
       "name": "Conflict: high-energy sad classical",
-      "profile": {"genre": "classical", "mood": "sad", "energy": 0.9, "likes_acoustic": true},
-      "relevant_ids": [13, 45, 46, 47],
-      "notes": "No ideal answer exists; any classical piece is acceptable."
+      "profile": {
+        "genre": "classical",
+        "mood": "sad",
+        "energy": 0.9,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [],
+      "acceptable_ids": [
+        13,
+        45,
+        46,
+        47,
+        59
+      ],
+      "forbidden_ids": [
+        69,
+        42,
+        54
+      ],
+      "notes": "No ideal answer exists. Classical, or a sad high-energy track, is acceptable; cheerful songs are not."
     },
     {
       "name": "Unknown genre and mood",
-      "profile": {"genre": "vaporwave", "mood": "sad", "energy": 0.5, "likes_acoustic": false},
-      "relevant_ids": [],
+      "profile": {
+        "genre": "vaporwave",
+        "mood": "sad",
+        "energy": 0.5,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [],
+      "acceptable_ids": [],
+      "forbidden_ids": [],
       "expect_warning": true,
-      "notes": "No ground truth. The system should at least warn that the labels cannot match."
+      "notes": "No ground truth. The system should warn that the labels cannot match."
     },
     {
       "name": "Out-of-range energy (1.5)",
-      "profile": {"genre": "pop", "mood": "happy", "energy": 1.5, "likes_acoustic": false},
-      "relevant_ids": [1, 22, 5, 10, 69],
+      "profile": {
+        "genre": "pop",
+        "mood": "happy",
+        "energy": 1.5,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [
+        1,
+        22
+      ],
+      "acceptable_ids": [
+        5,
+        10,
+        69,
+        42,
+        72
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        60,
+        13
+      ],
       "expect_warning": true,
-      "notes": "Energy should be clamped to 1.0 with a warning; happy, loud, danceable songs expected."
+      "notes": "Energy is clamped to 1.0 with a warning; happy, loud songs are expected."
     },
     {
       "name": "No matches, no acoustic pref",
-      "profile": {"genre": "polka", "mood": "zen", "energy": 0.5},
-      "relevant_ids": [],
+      "profile": {
+        "genre": "polka",
+        "mood": "zen",
+        "energy": 0.5
+      },
+      "ideal_ids": [],
+      "acceptable_ids": [],
+      "forbidden_ids": [],
       "expect_warning": true,
       "notes": "Nothing in the catalog fits. The system should warn rather than pretend."
     },
     {
       "name": "Metal fan wants calm",
-      "profile": {"genre": "metal", "mood": "chill", "energy": 0.1, "likes_acoustic": true},
-      "relevant_ids": [29, 45, 27, 28, 13, 6, 60],
-      "notes": "Contradictory profile; calm acoustic tracks are the sensible answer."
+      "profile": {
+        "genre": "metal",
+        "mood": "chill",
+        "energy": 0.1,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        28,
+        6
+      ],
+      "acceptable_ids": [
+        27,
+        29,
+        45,
+        13,
+        60,
+        4
+      ],
+      "forbidden_ids": [
+        17,
+        57,
+        58
+      ],
+      "notes": "Contradictory profile. Very calm acoustic tracks are right; loud metal is wrong."
     },
     {
       "name": "Messy casing and whitespace",
-      "profile": {"genre": "Lofi ", "mood": "CHILL", "energy": 0.4, "likes_acoustic": true},
-      "relevant_ids": [2, 4, 9, 21, 6, 28],
-      "equivalent_to": "Starter lofi",
+      "profile": {
+        "genre": "Lofi ",
+        "mood": "CHILL",
+        "energy": 0.4,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        4,
+        2,
+        21
+      ],
+      "acceptable_ids": [
+        9,
+        6,
+        28,
+        7
+      ],
+      "forbidden_ids": [
+        3,
+        14,
+        17,
+        57,
+        58,
+        48
+      ],
       "expect_warning": true,
+      "equivalent_to": "Starter lofi",
       "notes": "Must rank exactly like the clean lofi profile."
     },
     {
       "name": "Acoustic lover wants EDM",
-      "profile": {"genre": "edm", "mood": "euphoric", "energy": 0.96, "likes_acoustic": true},
-      "relevant_ids": [14, 49, 48],
+      "profile": {
+        "genre": "edm",
+        "mood": "euphoric",
+        "energy": 0.96,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        14,
+        49
+      ],
+      "acceptable_ids": [
+        48,
+        63,
+        50
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        27,
+        60
+      ],
       "notes": "Genre and mood outweigh the acoustic preference here."
+    },
+    {
+      "name": "Sad slow country",
+      "profile": {
+        "genre": "country",
+        "mood": "melancholy",
+        "energy": 0.35,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        41
+      ],
+      "acceptable_ids": [
+        11,
+        39,
+        78
+      ],
+      "forbidden_ids": [
+        14,
+        17,
+        57,
+        72
+      ],
+      "notes": "One song matches all four features."
+    },
+    {
+      "name": "Romantic jazz evening",
+      "profile": {
+        "genre": "jazz",
+        "mood": "romantic",
+        "energy": 0.3,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        32
+      ],
+      "acceptable_ids": [
+        7,
+        30,
+        76,
+        62,
+        51
+      ],
+      "forbidden_ids": [
+        14,
+        17,
+        57,
+        24,
+        44
+      ],
+      "notes": "Slow romantic jazz; romantic bossa nova and folk are acceptable neighbours."
+    },
+    {
+      "name": "Dreamy city pop",
+      "profile": {
+        "genre": "city pop",
+        "mood": "dreamy",
+        "energy": 0.6,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [
+        20
+      ],
+      "acceptable_ids": [
+        67,
+        68,
+        66,
+        38,
+        77
+      ],
+      "forbidden_ids": [
+        17,
+        57,
+        29
+      ],
+      "notes": "One exact match; other city pop and dreamy songs are acceptable."
+    },
+    {
+      "name": "Angry metal",
+      "profile": {
+        "genre": "metal",
+        "mood": "angry",
+        "energy": 0.95,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [
+        17,
+        58
+      ],
+      "acceptable_ids": [
+        57,
+        24,
+        44,
+        59
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        60,
+        27,
+        28
+      ],
+      "notes": "Angry metal is ideal; other aggressive tracks are acceptable."
+    },
+    {
+      "name": "Happy afrobeats party",
+      "profile": {
+        "genre": "afrobeats",
+        "mood": "happy",
+        "energy": 0.85,
+        "likes_acoustic": false
+      },
+      "ideal_ids": [
+        69,
+        71
+      ],
+      "acceptable_ids": [
+        1,
+        22,
+        63,
+        72,
+        19,
+        54
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        27,
+        13
+      ],
+      "notes": "Upbeat afrobeats first, then other joyful dance music."
+    },
+    {
+      "name": "Hopeful folk",
+      "profile": {
+        "genre": "folk",
+        "mood": "hopeful",
+        "energy": 0.38,
+        "likes_acoustic": true
+      },
+      "ideal_ids": [
+        18
+      ],
+      "acceptable_ids": [
+        60,
+        61,
+        62,
+        47
+      ],
+      "forbidden_ids": [
+        17,
+        57,
+        14
+      ],
+      "notes": "One exact match; other gentle acoustic songs are acceptable."
+    },
+    {
+      "name": "Query: mellow acoustic study",
+      "query": "something mellow and acoustic to study to",
+      "ideal_ids": [
+        4,
+        2,
+        21
+      ],
+      "acceptable_ids": [
+        9,
+        6,
+        28,
+        7
+      ],
+      "forbidden_ids": [
+        3,
+        14,
+        17,
+        57,
+        58,
+        48
+      ],
+      "notes": "Easy phrasing."
+    },
+    {
+      "name": "Query: sad tonight",
+      "query": "I feel sad tonight",
+      "ideal_ids": [
+        45,
+        41,
+        53,
+        78,
+        29
+      ],
+      "acceptable_ids": [
+        13,
+        59
+      ],
+      "forbidden_ids": [
+        69,
+        42,
+        54,
+        31,
+        1,
+        22
+      ],
+      "notes": "'sad' is not a catalog label; it must map to melancholy."
+    },
+    {
+      "name": "Query: workout, not acoustic",
+      "query": "workout music that is not acoustic",
+      "ideal_ids": [
+        5,
+        48,
+        72,
+        22
+      ],
+      "acceptable_ids": [
+        1,
+        14,
+        19,
+        71,
+        49,
+        63
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        60,
+        27,
+        13,
+        28
+      ],
+      "notes": "Energy and a negated acoustic preference."
+    },
+    {
+      "name": "Query: fall asleep",
+      "query": "music to fall asleep to",
+      "ideal_ids": [
+        29,
+        28,
+        27,
+        45
+      ],
+      "acceptable_ids": [
+        6,
+        60,
+        13
+      ],
+      "forbidden_ids": [
+        3,
+        14,
+        17,
+        48,
+        57,
+        58,
+        72,
+        5,
+        22
+      ],
+      "notes": "Hard phrasing: 'asleep' is not 'sleep'."
+    },
+    {
+      "name": "Query: happy and danceable",
+      "query": "something happy and danceable",
+      "ideal_ids": [
+        1,
+        22,
+        69,
+        42
+      ],
+      "acceptable_ids": [
+        54,
+        10,
+        26,
+        46,
+        66,
+        72,
+        71
+      ],
+      "forbidden_ids": [
+        29,
+        45,
+        13,
+        41,
+        78,
+        53
+      ],
+      "notes": "Hard phrasing: 'danceable'."
+    },
+    {
+      "name": "Query: warm hug",
+      "query": "songs that feel like a warm hug",
+      "ideal_ids": [
+        60,
+        47,
+        18,
+        39,
+        62
+      ],
+      "acceptable_ids": [
+        7,
+        21,
+        4,
+        65,
+        75
+      ],
+      "forbidden_ids": [
+        17,
+        57,
+        14,
+        24,
+        44
+      ],
+      "notes": "Hard, figurative phrasing: gentle, warm, acoustic."
     }
   ],
   "parser_cases": [
-    {"query": "something mellow and acoustic to study to", "tier": "easy",
-     "expected": {"genre": "lofi", "mood": "chill", "likes_acoustic": true, "energy_max": 0.45}},
-    {"query": "I feel sad tonight", "tier": "easy",
-     "expected": {"mood": "melancholy"}},
-    {"query": "romantic dinner with jazz", "tier": "easy",
-     "expected": {"genre": "jazz", "mood": "romantic"}},
-    {"query": "upbeat afrobeats for a party", "tier": "easy",
-     "expected": {"genre": "afrobeats", "energy_min": 0.8}},
-    {"query": "dreamy bossa nova", "tier": "easy",
-     "expected": {"genre": "bossa nova", "mood": "dreamy"}},
-    {"query": "angry metal", "tier": "easy",
-     "expected": {"genre": "metal", "mood": "angry"}},
-    {"query": "relaxing acoustic folk", "tier": "easy",
-     "expected": {"genre": "folk", "mood": "relaxed", "likes_acoustic": true}},
-    {"query": "workout music that is not acoustic", "tier": "easy",
-     "expected": {"energy_min": 0.85, "likes_acoustic": false}},
-    {"query": "sad slow country", "tier": "easy",
-     "expected": {"genre": "country", "mood": "melancholy", "energy_max": 0.45}},
-    {"query": "calm piano for sleeping", "tier": "easy",
-     "expected": {"genre": "classical", "energy_max": 0.25}},
-    {"query": "music to fall asleep to", "tier": "hard",
-     "expected": {"energy_max": 0.25}},
-    {"query": "something happy and danceable", "tier": "hard",
-     "expected": {"mood": "happy", "energy_min": 0.7}},
-    {"query": "background music while I work", "tier": "hard",
-     "expected": {"mood": "focused", "energy_max": 0.6}},
-    {"query": "pump me up for the gym", "tier": "hard",
-     "expected": {"energy_min": 0.85}},
-    {"query": "songs that feel like a warm hug", "tier": "hard",
-     "expected": {"mood": "relaxed", "energy_max": 0.5}}
+    {
+      "query": "something mellow and acoustic to study to",
+      "tier": "easy",
+      "expected": {
+        "genre": "lofi",
+        "mood": "chill",
+        "likes_acoustic": true,
+        "energy_max": 0.45
+      }
+    },
+    {
+      "query": "I feel sad tonight",
+      "tier": "easy",
+      "expected": {
+        "mood": "melancholy"
+      }
+    },
+    {
+      "query": "romantic dinner with jazz",
+      "tier": "easy",
+      "expected": {
+        "genre": "jazz",
+        "mood": "romantic"
+      }
+    },
+    {
+      "query": "upbeat afrobeats for a party",
+      "tier": "easy",
+      "expected": {
+        "genre": "afrobeats",
+        "energy_min": 0.8
+      }
+    },
+    {
+      "query": "dreamy bossa nova",
+      "tier": "easy",
+      "expected": {
+        "genre": "bossa nova",
+        "mood": "dreamy"
+      }
+    },
+    {
+      "query": "angry metal",
+      "tier": "easy",
+      "expected": {
+        "genre": "metal",
+        "mood": "angry"
+      }
+    },
+    {
+      "query": "relaxing acoustic folk",
+      "tier": "easy",
+      "expected": {
+        "genre": "folk",
+        "mood": "relaxed",
+        "likes_acoustic": true
+      }
+    },
+    {
+      "query": "workout music that is not acoustic",
+      "tier": "easy",
+      "expected": {
+        "energy_min": 0.85,
+        "likes_acoustic": false
+      }
+    },
+    {
+      "query": "sad slow country",
+      "tier": "easy",
+      "expected": {
+        "genre": "country",
+        "mood": "melancholy",
+        "energy_max": 0.45
+      }
+    },
+    {
+      "query": "calm piano for sleeping",
+      "tier": "easy",
+      "expected": {
+        "genre": "classical",
+        "energy_max": 0.25
+      }
+    },
+    {
+      "query": "music to fall asleep to",
+      "tier": "hard",
+      "expected": {
+        "energy_max": 0.25
+      }
+    },
+    {
+      "query": "something happy and danceable",
+      "tier": "hard",
+      "expected": {
+        "mood": "happy",
+        "energy_min": 0.7
+      }
+    },
+    {
+      "query": "background music while I work",
+      "tier": "hard",
+      "expected": {
+        "mood": "focused",
+        "energy_max": 0.6
+      }
+    },
+    {
+      "query": "pump me up for the gym",
+      "tier": "hard",
+      "expected": {
+        "energy_min": 0.85
+      }
+    },
+    {
+      "query": "songs that feel like a warm hug",
+      "tier": "hard",
+      "expected": {
+        "mood": "relaxed",
+        "energy_max": 0.5
+      }
+    }
   ]
 }
