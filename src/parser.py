@@ -128,3 +128,15 @@ def parse_query(
         profile["likes_acoustic"] = False
 
     return profile, notes
+
+
+def get_parse_fn(name: str):
+    """Return the parser function for 'keyword' (offline) or 'claude' (live API, falls back)."""
+    if name == "keyword":
+        return parse_query
+    if name == "claude":
+        # Imported lazily: it needs the anthropic package and itself imports this module.
+        from src.claude_parser import make_claude_parser
+
+        return make_claude_parser()
+    raise ValueError(f"unknown parser {name!r}; expected 'keyword' or 'claude'")

@@ -1,3 +1,4 @@
 pandas
 pytest
 streamlit
+anthropic>=2.6

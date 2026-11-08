@@ -12,7 +12,7 @@ You will implement the functions in recommender.py:
 import argparse
 
 from src.guardrails import known_labels, sanitize_profile
-from src.parser import parse_query
+from src.parser import get_parse_fn
 from src.recommender import load_songs, recommend_songs
 
 
@@ -84,13 +84,17 @@ def main() -> None:
         "--query",
         help='free-text request, e.g. "something mellow and acoustic to study to"',
     )
+    arg_parser.add_argument(
+        "--parser", choices=["keyword", "claude"], default="keyword",
+        help="how --query is parsed; 'claude' calls the API and falls back to keywords on failure",
+    )
     args = arg_parser.parse_args()
 
     songs = load_songs("data/songs.csv")
 
     if args.query:
         genres, moods = known_labels(songs)
-        user_prefs, notes = parse_query(args.query, genres, moods)
+        user_prefs, notes = get_parse_fn(args.parser)(args.query, genres, moods)
         print_recommendations(f"Query: {args.query}", user_prefs, songs, notes=notes)
         return
 

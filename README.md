@@ -19,7 +19,7 @@ It matters because the original had a documented weakness: exact-match labels ga
 The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In short, data moves through five stages:
 
 1. **Input and guardrails (implemented).** The user's request is cleaned before anything else happens: energy is clamped to 0-1, casing and whitespace are normalized, and unknown labels are flagged.
-2. **Query parser (keyword fallback implemented, Claude parser planned).** The Claude API will convert free text into a `UserProfile` (genre, mood, target energy, likes acoustic) and validate it against the labels in the catalog. If there is no API key or the call fails, the keyword parser in `src/parser.py` takes over so the project still runs offline. Today only the keyword parser exists.
+2. **Query parser (implemented; live Claude results not yet measured).** `src/claude_parser.py` sends the request to Claude Haiku 5.5 with a structured-output schema and converts the answer into a `UserProfile` (genre, mood, target energy, likes acoustic). Everything Claude returns is validated against the catalog, so an invented genre or mood is discarded. If there are no credentials, the call fails, Claude declines, or the output is unusable, the keyword parser in `src/parser.py` takes over so the project still runs offline, and the fallback is noted in the output.
 3. **Retriever (planned).** Local embeddings over song descriptions pull candidate songs by meaning. This is the RAG step: the system looks up information before answering.
 4. **Core recommender (existing).** `score_song()` and `recommend_songs()` rank the candidates and produce a reason for each score. Ranking stays deterministic and is never delegated to the LLM.
 5. **Output.** The top-k list with scores and reasons.
@@ -49,7 +49,7 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In 
    pip install -r requirements.txt
    ```
 
-4. **(Planned) Set your Claude API key** to enable free-text parsing. This step is optional: without a key the app falls back to the keyword parser.
+4. **(Optional) Set your Claude API key** to use the Claude parser (`--parser claude`). Without a key the app falls back to the keyword parser and says so. Live runs make real API calls to `claude-haiku-5-5`, which is inexpensive but not free.
 
    ```bash
    export ANTHROPIC_API_KEY="your-key-here"     # Mac or Linux
@@ -61,6 +61,7 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In 
    ```bash
    python -m src.main
    python -m src.main --query "something mellow and acoustic to study to"
+   python -m src.main --query "music to fall asleep to" --parser claude
    ```
 
 6. **Run the tests.**
@@ -74,11 +75,14 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In 
    ```bash
    python -m src.evaluation
    python -m src.evaluation --out reports/baseline.md --label "my run"
+   python -m src.evaluation --parser claude --out reports/claude.md   # live API calls
    ```
+
+   With `--parser claude` the report counts how many answers silently fell back to the keyword parser, so a missing key can't be mistaken for a Claude result.
 
 ## Sample Interactions
 
-All three examples below are real output from the current code. Free-text parsing currently uses the offline keyword parser; the Claude parser and embedding retriever are still planned.
+All three examples below are real output from the current code. Free-text parsing in these examples uses the offline keyword parser; I have not yet captured live output from the Claude parser, and the embedding retriever is still planned.
 
 ### Example 1: Structured profile (works today)
 
@@ -109,7 +113,7 @@ All three examples below are real output from the current code. Free-text parsin
 3. Spacewalk Thoughts - Orbit Bloom     Score: 0.76 / 1.00
 ```
 
-The word "mellow" is not a label in the catalog. Without a parser it would score zero for mood; the keyword parser maps it to `chill`. The Claude parser and embedding retriever (planned) will handle phrasings the keyword lists don't cover.
+The word "mellow" is not a label in the catalog. Without a parser it would score zero for mood; the keyword parser maps it to `chill`. The Claude parser (`--parser claude`) is meant to handle phrasings the keyword lists don't cover; its live results are still to be measured, and the embedding retriever is planned.
 
 ### Example 3: Messy input and the guardrails (works today)
 
@@ -165,7 +169,9 @@ What this tells me: the scorer itself is doing its job on well-formed profiles, 
 
 Caveats: the golden set is small, I drafted the relevance judgments myself, and the `relevant_ids` lists are fairly generous, which makes the ranking metrics easy to satisfy. The 79 pytest tests also guard the metrics, the golden-set format and the baseline.
 
-**Still planned.** A side-by-side comparison of this baseline against the Claude parser and embedding retriever once they exist.
+**Claude parser tests (implemented).** 21 tests use a fake client, so no network or key is needed. They check the request shape (model, structured output, no sampling parameters), that invented labels and out-of-range energy are cleaned up, that user text is passed as data rather than instructions, and that each failure path (API error, refusal, empty output, missing credentials) falls back to the keyword parser. This tests my code around Claude, not how well Claude understands music requests.
+
+**Still to do.** Run `python -m src.evaluation --parser claude` with a real key and compare it to the baseline, then add the embedding retriever and compare again. Until the live run is done, there is no evidence yet that the Claude parser beats the keyword baseline.
 
 **What I learned so far.** Hand-reading output doesn't scale, and the failures worth catching are the quiet ones: results that look plausible but are wrong. That is the main reason the testing system is part of the plan.
 

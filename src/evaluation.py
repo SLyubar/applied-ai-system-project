@@ -11,9 +11,10 @@ import sys
 from typing import Callable, Dict, List, Sequence, Tuple
 
 from src.guardrails import known_labels, sanitize_profile
-from src.parser import parse_query
+from src.parser import get_parse_fn
 from src.recommender import load_songs, recommend_songs
 
+FALLBACK_NOTE_PREFIX = "Claude parser unavailable"  # see src/claude_parser.py
 GOLDEN_PATH = "data/golden_set.json"
 SONGS_PATH = "data/songs.csv"
 DEFAULT_K = 5
@@ -121,16 +122,18 @@ def evaluate_parser(cases: List[Dict], songs: List[Dict], parse_fn: ParseFn) -> 
     results: List[Dict] = []
     for case in cases:
         try:
-            profile, _ = parse_fn(case["query"], genres, moods)
+            profile, notes = parse_fn(case["query"], genres, moods)
             failed = check_parse(profile, case["expected"])
         except ValueError as error:
-            profile, failed = {}, [f"error: {error}"]
+            profile, notes, failed = {}, [], [f"error: {error}"]
         results.append({
             "query": case["query"],
             "tier": case.get("tier", "easy"),
             "profile": profile,
             "failed_fields": failed,
             "passed": not failed,
+            # A fallback answer must not be credited to the parser under test.
+            "fell_back": any(n.startswith(FALLBACK_NOTE_PREFIX) for n in notes),
         })
     return results
 
@@ -162,6 +165,7 @@ def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
         "parser_hard": rate(hard),
         "parser_passed": sum(1 for p in parsing if p["passed"]),
         "parser_total": len(parsing),
+        "parser_fallbacks": sum(1 for p in parsing if p.get("fell_back")),
     }
 
 
@@ -193,6 +197,7 @@ def format_report(
         f"| Parser accuracy (all) | {s['parser_passed']}/{s['parser_total']} ({s['parser_overall']:.0%}) |",
         f"| Parser accuracy (easy / hard) | {s['parser_easy']:.0%} / {s['parser_hard']:.0%} |",
         f"| Deterministic (repeat runs identical) | {'yes' if deterministic else 'NO'} |",
+        f"| Parser answers that fell back to keywords | {s['parser_fallbacks']}/{s['parser_total']} |",
         "",
         "## Ranking cases",
         "",
@@ -224,6 +229,11 @@ def format_report(
         "",
         "- The golden set is a set of human judgments. Check `data/golden_set.json` before trusting any number above.",
     ]
+    if s["parser_fallbacks"]:
+        lines.append(
+            f"- **{s['parser_fallbacks']} parser answer(s) came from the keyword fallback, not Claude.** "
+            "The parser numbers above do not measure Claude alone. Check credentials and network, then re-run."
+        )
     if no_truth:
         lines.append(f"- Cases with no ground truth, checked only for warnings: {', '.join(no_truth)}.")
     if failed_ranking or any(not p["passed"] for p in parsing):
@@ -235,15 +245,21 @@ def main(argv: Sequence[str] = None) -> int:
     arg_parser = argparse.ArgumentParser(description="Evaluate the recommender against the golden set")
     arg_parser.add_argument("--k", type=int, default=DEFAULT_K, help="cutoff for precision@k")
     arg_parser.add_argument("--out", help="also write the report to this file")
-    arg_parser.add_argument("--label", default="baseline", help="name shown in the report title")
+    arg_parser.add_argument("--label", help="name shown in the report title")
     arg_parser.add_argument("--strict", action="store_true", help="exit 1 if any case fails")
+    arg_parser.add_argument(
+        "--parser", choices=["keyword", "claude"], default="keyword",
+        help="query parser to evaluate; 'claude' makes live API calls (needs credentials)",
+    )
     args = arg_parser.parse_args(argv)
+    if args.label is None:
+        args.label = "baseline" if args.parser == "keyword" else f"{args.parser} parser"
 
     songs = load_songs(SONGS_PATH)
     golden = load_golden()
 
     ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k)
-    parsing = evaluate_parser(golden["parser_cases"], songs, parse_query)
+    parsing = evaluate_parser(golden["parser_cases"], songs, get_parse_fn(args.parser))
     deterministic = is_deterministic(golden["ranking_cases"], songs, baseline_rank, args.k)
 
     report = format_report(ranking, parsing, deterministic, songs, args.k, args.label)
