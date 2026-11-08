@@ -1,21 +1,81 @@
-id,title,artist,genre,mood,energy,tempo_bpm,valence,danceability,acousticness
-1,Sunrise City,Neon Echo,pop,happy,0.82,118,0.84,0.79,0.18
-2,Midnight Coding,LoRoom,lofi,chill,0.42,78,0.56,0.62,0.71
-3,Storm Runner,Voltline,rock,intense,0.91,152,0.48,0.66,0.10
-4,Library Rain,Paper Lanterns,lofi,chill,0.35,72,0.60,0.58,0.86
-5,Gym Hero,Max Pulse,pop,intense,0.93,132,0.77,0.88,0.05
-6,Spacewalk Thoughts,Orbit Bloom,ambient,chill,0.28,60,0.65,0.41,0.92
-7,Coffee Shop Stories,Slow Stereo,jazz,relaxed,0.37,90,0.71,0.54,0.89
-8,Night Drive Loop,Neon Echo,synthwave,moody,0.75,110,0.49,0.73,0.22
-9,Focus Flow,LoRoom,lofi,focused,0.40,80,0.59,0.60,0.78
-10,Rooftop Lights,Indigo Parade,indie pop,happy,0.76,124,0.81,0.82,0.35
-11,Dust Road Blues,Hollow Pines,country,nostalgic,0.48,96,0.62,0.57,0.74
-12,Concrete Kingdom,Verse Theory,hip hop,confident,0.78,92,0.58,0.85,0.09
-13,Moonlit Sonata Remix,Aria Vale,classical,melancholy,0.22,66,0.25,0.30,0.95
-14,Bassline Cathedral,Kinetic Drift,edm,euphoric,0.96,128,0.88,0.92,0.03
-15,Velvet Hours,Nina Solace,r&b,romantic,0.52,84,0.69,0.74,0.40
-16,Island Breeze,Salt & Sun,reggae,relaxed,0.55,76,0.80,0.78,0.45
-17,Iron Throne,Black Ember,metal,angry,0.97,168,0.22,0.45,0.04
-18,Porch Light Promise,Willow Creek,folk,hopeful,0.38,88,0.66,0.50,0.91
-19,Calle Fuego,Los Cometas,latin,energetic,0.88,100,0.90,0.91,0.15
-20,Rainy Tokyo Nights,Mirai Kei,city pop,dreamy,0.60,108,0.72,0.76,0.28
+id,title,artist,genre,mood,energy,tempo_bpm,valence,danceability,acousticness,description
+1,Sunrise City,Neon Echo,pop,happy,0.82,118,0.84,0.79,0.18,bright upbeat pop with shimmering synths and a feel-good chorus for morning energy
+2,Midnight Coding,LoRoom,lofi,chill,0.42,78,0.56,0.62,0.71,mellow lofi beats with soft keys for late night coding and focus
+3,Storm Runner,Voltline,rock,intense,0.91,152,0.48,0.66,0.10,driving distorted guitars and pounding drums for high adrenaline runs
+4,Library Rain,Paper Lanterns,lofi,chill,0.35,72,0.60,0.58,0.86,gentle rainy-day lofi with warm piano and quiet vinyl crackle for studying
+5,Gym Hero,Max Pulse,pop,intense,0.93,132,0.77,0.88,0.05,hard-hitting dance pop built for heavy workouts and personal records
+6,Spacewalk Thoughts,Orbit Bloom,ambient,chill,0.28,60,0.65,0.41,0.92,slow floating ambient textures that feel like drifting weightless in space
+7,Coffee Shop Stories,Slow Stereo,jazz,relaxed,0.37,90,0.71,0.54,0.89,easygoing acoustic jazz with brushed drums for a lazy cafe afternoon
+8,Night Drive Loop,Neon Echo,synthwave,moody,0.75,110,0.49,0.73,0.22,pulsing retro synthwave for driving through a neon city after dark
+9,Focus Flow,LoRoom,lofi,focused,0.40,80,0.59,0.60,0.78,steady unobtrusive lofi groove designed for deep concentration and work
+10,Rooftop Lights,Indigo Parade,indie pop,happy,0.76,124,0.81,0.82,0.35,sunny indie pop with jangly guitars and handclaps for summer evenings
+11,Dust Road Blues,Hollow Pines,country,nostalgic,0.48,96,0.62,0.57,0.74,wistful country with slide guitar that remembers small towns and old friends
+12,Concrete Kingdom,Verse Theory,hip hop,confident,0.78,92,0.58,0.85,0.09,swaggering hip hop with heavy bass and bold lyrics about ambition
+13,Moonlit Sonata Remix,Aria Vale,classical,melancholy,0.22,66,0.25,0.30,0.95,sorrowful solo piano with a modern ambient twist for quiet reflection
+14,Bassline Cathedral,Kinetic Drift,edm,euphoric,0.96,128,0.88,0.92,0.03,towering festival edm with huge drops and euphoric crowd-pleasing builds
+15,Velvet Hours,Nina Solace,r&b,romantic,0.52,84,0.69,0.74,0.40,smooth slow-burning r&b with silky vocals for a romantic evening
+16,Island Breeze,Salt & Sun,reggae,relaxed,0.55,76,0.80,0.78,0.45,laid-back reggae with warm bass and offbeat guitar for beach days
+17,Iron Throne,Black Ember,metal,angry,0.97,168,0.22,0.45,0.04,furious double-kick metal with growled vocals and relentless riffs
+18,Porch Light Promise,Willow Creek,folk,hopeful,0.38,88,0.66,0.50,0.91,tender acoustic folk about better days with fingerpicked guitar and harmonies
+19,Calle Fuego,Los Cometas,latin,energetic,0.88,100,0.90,0.91,0.15,fiery latin dance track with brass and percussion made for the dance floor
+20,Rainy Tokyo Nights,Mirai Kei,city pop,dreamy,0.60,108,0.72,0.76,0.28,glossy dreamy city pop with funky bass that feels like neon rain in Tokyo
+21,Dusty Cassette,LoRoom,lofi,relaxed,0.33,70,0.55,0.55,0.80,slow dusty lofi beats with tape hiss for winding down at the end of the day
+22,Glitter Static,Neon Echo,pop,energetic,0.85,124,0.86,0.85,0.12,glossy high-energy pop with sparkling synths and a big singalong hook
+23,Paper Hearts,Maple June,pop,romantic,0.55,104,0.70,0.66,0.40,sweet mid-tempo pop love song with warm vocals and soft guitar
+24,Rust and Thunder,Voltline,rock,angry,0.88,160,0.35,0.52,0.08,raw furious rock with gritty guitars and shouted vocals full of frustration
+25,Cedar Static,The Loose Ends,rock,nostalgic,0.68,128,0.60,0.55,0.25,warm classic rock with crunchy guitars that sounds like old summer road trips
+26,Garage Sunday,The Loose Ends,rock,happy,0.74,140,0.72,0.62,0.20,cheerful garage rock with fast strumming and a carefree weekend attitude
+27,Glass Horizon,Orbit Bloom,ambient,dreamy,0.18,55,0.50,0.22,0.88,shimmering ambient pads that feel like floating above the clouds in a dream
+28,Deep Field Drift,Sable Wave,ambient,chill,0.22,58,0.55,0.25,0.80,calm spacious ambient with slow evolving tones for relaxing or meditation
+29,Fog Over Harbor,Tidal Room,ambient,melancholy,0.15,50,0.30,0.20,0.85,somber ambient soundscape of foghorns and low drones over a quiet harbor
+30,Smoky Corner,Blue Lantern Trio,jazz,moody,0.45,110,0.50,0.52,0.82,dark smoky jazz trio with muted trumpet for a late night in a dim club
+31,Sunday Brunch Swing,Velvet Brass,jazz,happy,0.60,130,0.82,0.72,0.70,lively swing jazz with bouncy horns for a cheerful weekend brunch
+32,Last Call Ballad,Marlowe Quintet,jazz,romantic,0.30,70,0.45,0.35,0.88,slow romantic jazz ballad with soft saxophone for the last dance of the night
+33,Chrome Skyline,Neon Echo,synthwave,energetic,0.82,120,0.60,0.78,0.10,fast retro synthwave with arpeggiated bass that feels like racing downtown
+34,Arcade Sunset,Pixel Coast,synthwave,nostalgic,0.65,105,0.70,0.70,0.15,warm 80s style synthwave that recalls arcades and summer evenings from childhood
+35,Midnight Grid,Laser Vale,synthwave,moody,0.70,100,0.40,0.68,0.12,brooding synthwave with dark pulsing bass and cold neon atmosphere
+36,Bike Ride Home,Indigo Parade,indie pop,hopeful,0.62,116,0.78,0.65,0.45,optimistic indie pop with bright guitars about good things ahead
+37,Thrift Store Love,Maple June,indie pop,romantic,0.50,98,0.72,0.58,0.55,quirky tender indie pop love song with ukulele and soft whispered vocals
+38,Window Seat,Little Kestrel,indie pop,dreamy,0.45,92,0.60,0.50,0.60,hazy dreamy indie pop with reverb guitars for staring out of a train window
+39,Back Porch Sundown,Hollow Pines,country,relaxed,0.40,84,0.68,0.52,0.80,easy acoustic country with lazy banjo for watching the sun go down
+40,Pickup Truck Prayer,Dale Harlan,country,hopeful,0.58,110,0.65,0.60,0.62,uplifting country anthem about faith and fresh starts with bright steel guitar
+41,Whiskey Letters,Willow Creek,country,melancholy,0.35,76,0.30,0.45,0.85,sad slow country ballad about a lost love and unsent letters
+42,Block Party Gospel,Verse Theory,hip hop,happy,0.75,96,0.80,0.88,0.10,joyful hip hop with soulful samples and a feel-good summer cookout vibe
+43,Late Shift Lyrics,Quiet Ledger,hip hop,focused,0.52,88,0.45,0.70,0.20,calm boom bap hip hop with steady drums that is great for working late
+44,Crown Heavy,Verse Theory,hip hop,angry,0.85,140,0.30,0.75,0.08,aggressive hard-hitting hip hop with snarling bars and distorted bass
+45,Nocturne for Rain,Aria Vale,classical,melancholy,0.18,60,0.22,0.25,0.97,delicate sorrowful nocturne for solo piano that sounds like rain at midnight
+46,Spring Allegro,Meridian Strings,classical,happy,0.60,132,0.80,0.45,0.94,bright playful string orchestra piece full of bouncing melodies and joy
+47,Cathedral Suite,Aria Vale,classical,hopeful,0.35,72,0.55,0.30,0.96,slow uplifting choral and organ suite that builds toward a hopeful dawn
+48,Pulse Garden,Kinetic Drift,edm,energetic,0.92,130,0.80,0.90,0.04,relentless high-energy house with pounding kicks and bright synth stabs
+49,Sunrise Drop,Halo Circuit,edm,euphoric,0.90,126,0.90,0.88,0.05,uplifting trance with soaring melodies and a massive euphoric drop
+50,Afterhours Static,Kinetic Drift,edm,moody,0.78,122,0.40,0.82,0.06,dark minimal techno with hypnotic bass for a late night warehouse
+51,Slow Dance Voicemail,Nina Solace,r&b,romantic,0.45,78,0.65,0.72,0.35,intimate slow jam r&b with falsetto vocals and warm electric piano
+52,Golden Hour Hum,Opal Rivers,r&b,chill,0.40,82,0.70,0.68,0.45,mellow neo soul with smooth grooves for unwinding at golden hour
+53,Heartbreak Receipts,Opal Rivers,r&b,melancholy,0.38,70,0.28,0.60,0.40,sad moody r&b about a breakup with aching vocals and sparse beats
+54,Sea Salt Skank,Salt & Sun,reggae,happy,0.60,80,0.85,0.80,0.40,sunny upbeat reggae with bouncing bass for dancing barefoot at the beach
+55,Hammock Dub,Dub Harbor,reggae,chill,0.38,72,0.72,0.70,0.50,spacious dub reggae with deep echoing bass for lounging in a hammock
+56,Roots in Rain,Salt & Sun,reggae,hopeful,0.50,78,0.70,0.72,0.48,positive roots reggae about perseverance with warm organ and gentle rhythm
+57,Anvil Chorus,Black Ember,metal,intense,0.95,180,0.25,0.40,0.03,crushing thrash metal with blistering riffs and relentless drumming
+58,Ashen Crown,Grave Orchard,metal,angry,0.93,172,0.18,0.38,0.05,brutal death metal with guttural vocals and furious blast beats
+59,Black Lantern Hymn,Grave Orchard,metal,melancholy,0.80,140,0.15,0.35,0.10,doom-laden gothic metal with mournful melodies and heavy slow riffs
+60,Creekbed Lullaby,Willow Creek,folk,relaxed,0.28,76,0.62,0.40,0.95,soft acoustic folk lullaby with gentle fingerpicking for slow peaceful evenings
+61,Harvest Road,Fern & Fable,folk,nostalgic,0.45,96,0.60,0.52,0.90,wistful folk with fiddle and banjo that recalls autumn on the family farm
+62,Letters to Orchard Lane,Fern & Fable,folk,romantic,0.33,80,0.58,0.42,0.93,tender romantic folk duet with soft guitar and intertwined harmonies
+63,Noche de Salsa,Los Cometas,latin,euphoric,0.85,98,0.92,0.93,0.20,explosive salsa with blazing horns and congas that fills the dance floor
+64,Corazon Lento,Luna Vega,latin,romantic,0.50,92,0.70,0.75,0.55,smooth romantic latin ballad with nylon guitar and passionate vocals
+65,Playa y Guitarra,Luna Vega,latin,relaxed,0.42,86,0.78,0.68,0.70,breezy acoustic latin pop with gentle guitar for a lazy seaside afternoon
+66,Neon Taxi Ride,Mirai Kei,city pop,energetic,0.72,112,0.82,0.80,0.25,upbeat funky city pop with slap bass and bright synths for a night out
+67,Tokyo Skyline 1985,Mirai Kei,city pop,nostalgic,0.62,106,0.75,0.74,0.30,vintage 80s city pop with lush synth strings that feels like looking back on youth
+68,Rain on Shibuya,Yoru Club,city pop,moody,0.52,96,0.50,0.66,0.35,smoky late night city pop with jazzy chords and a lonely urban mood
+69,Lagos Sunrise,Ade Rhythm,afrobeats,happy,0.80,104,0.90,0.90,0.25,joyful afrobeats with bright guitar and bouncing percussion that gets everyone dancing
+70,Midnight in Accra,Kofi Sound,afrobeats,romantic,0.60,98,0.75,0.82,0.30,sensual smooth afrobeats with warm vocals and a slow groove for a date night
+71,Street Carnival Run,Ade Rhythm,afrobeats,energetic,0.88,108,0.88,0.92,0.18,fast afrobeats with talking drums and infectious hooks for a street party
+72,Starlight Choreo,Luna Seven,k-pop,energetic,0.88,128,0.85,0.90,0.08,polished high-energy k-pop with punchy hooks and sharp dance break
+73,Cherry Blossom Call,Haneul,k-pop,hopeful,0.62,110,0.80,0.72,0.30,bright optimistic k-pop ballad-pop about new beginnings in spring
+74,Midnight Han River,Haneul,k-pop,dreamy,0.48,92,0.62,0.66,0.35,soft dreamy k-pop with airy synths and gentle vocals for a night walk
+75,Ipanema Afternoon,Sol Menezes,bossa nova,relaxed,0.32,84,0.78,0.60,0.88,gentle bossa nova with nylon guitar and soft vocals for a sunny afternoon
+76,Cafe Corcovado,Sol Menezes,bossa nova,romantic,0.28,78,0.70,0.55,0.90,intimate romantic bossa nova with whispered vocals and delicate guitar
+77,Moonlit Samba Lento,Lia Bastos,bossa nova,dreamy,0.35,88,0.72,0.58,0.85,slow dreamy bossa nova with shimmering guitar like a warm night by the sea
+78,Delta Dust,Muddy Lantern,blues,melancholy,0.42,76,0.30,0.50,0.75,slow sorrowful delta blues with bottleneck slide guitar and a weary voice
+79,Crossroads Shuffle,Muddy Lantern,blues,confident,0.60,100,0.55,0.66,0.55,strutting electric blues shuffle with a gritty confident guitar swagger
+80,Rainy Motel Blues,Ella Ironwood,blues,moody,0.38,68,0.32,0.45,0.70,dark smoldering blues with smoky vocals about a lonely rainy night

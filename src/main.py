@@ -9,7 +9,11 @@ You will implement the functions in recommender.py:
 - recommend_songs
 """
 
-from recommender import load_songs, recommend_songs
+import argparse
+
+from src.guardrails import known_labels, sanitize_profile
+from src.parser import parse_query
+from src.recommender import load_songs, recommend_songs
 
 
 PROFILES = {
@@ -28,7 +32,7 @@ PROFILES = {
     "Out-of-range energy (1.5)": {
         "genre": "pop", "mood": "happy", "energy": 1.5, "likes_acoustic": False,
     },
-    "No matches, no acoustic pref": {"genre": "k-pop", "mood": "zen", "energy": 0.5},
+    "No matches, no acoustic pref": {"genre": "polka", "mood": "zen", "energy": 0.5},
     "Metal fan wants calm": {
         "genre": "metal", "mood": "chill", "energy": 0.1, "likes_acoustic": True,
     },
@@ -47,7 +51,11 @@ def describe_acoustic(user_prefs: dict) -> str:
     return "likes acoustic" if user_prefs["likes_acoustic"] else "prefers non-acoustic"
 
 
-def print_recommendations(name: str, user_prefs: dict, songs: list, k: int = 5) -> None:
+def print_recommendations(
+    name: str, user_prefs: dict, songs: list, k: int = 5, notes: list = None
+) -> None:
+    genres, moods = known_labels(songs)
+    user_prefs, warnings = sanitize_profile(user_prefs, genres, moods)
     recommendations = recommend_songs(user_prefs, songs, k=k)
     divider = "-" * 60
 
@@ -58,6 +66,8 @@ def print_recommendations(name: str, user_prefs: dict, songs: list, k: int = 5) 
         f"energy {user_prefs['energy']:.2f} | {describe_acoustic(user_prefs)}"
     )
     print("=" * 60)
+    for message in (notes or []) + warnings:
+        print(f"  ! {message}")
 
     for rank, (song, score, explanation) in enumerate(recommendations, start=1):
         print(f"\n{rank}. {song['title']} - {song['artist']}")
@@ -69,7 +79,20 @@ def print_recommendations(name: str, user_prefs: dict, songs: list, k: int = 5) 
 
 
 def main() -> None:
+    arg_parser = argparse.ArgumentParser(description="Music Recommender")
+    arg_parser.add_argument(
+        "--query",
+        help='free-text request, e.g. "something mellow and acoustic to study to"',
+    )
+    args = arg_parser.parse_args()
+
     songs = load_songs("data/songs.csv")
+
+    if args.query:
+        genres, moods = known_labels(songs)
+        user_prefs, notes = parse_query(args.query, genres, moods)
+        print_recommendations(f"Query: {args.query}", user_prefs, songs, notes=notes)
+        return
 
     for name, user_prefs in PROFILES.items():
         print_recommendations(name, user_prefs, songs)

@@ -1,601 +1,167 @@
-# 🎵 Music Recommender Simulation
+# 🎵 Music Recommender, Extended with RAG and a Reliability System
 
-## Project Summary
+> **DRAFT.** This README describes the planned system. Sections marked **(planned)** describe features that are designed but not yet implemented. Update or remove those markers as each feature lands.
 
-In this project you will build and explain a small music recommender system.
+## Original Project: Music Recommender Simulation
 
-Your goal is to:
+This project extends **Music Recommender Simulation**, a small CLI-first content-based music recommender. The original goal was to represent songs and a listener's taste profile as data, turn them into a transparent scoring rule, and evaluate where that rule succeeds and fails. It scored each song in a 20-song CSV on energy closeness, mood match, genre match, and acoustic preference (`0.40 / 0.25 / 0.20 / 0.15`), then returns the top-k songs with a plain-language reason for every point awarded. It was stress-tested against three standard and seven adversarial hand-written profiles.
 
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
+## Title and Summary
 
-Replace this paragraph with your own summary of what your version does.
+**Music Recommender: Retrieval-Augmented Edition**
 
----
+This project lets a listener ask for music in plain language ("something calm and acoustic for a rainy study session") and get ranked, explained recommendations. Two additions make that possible: a **Claude-powered query parser** that turns free text into a structured taste profile, and a **local embedding retriever** that finds candidate songs by meaning instead of exact label matches. A **reliability system** (guardrails, unit tests, and an evaluation harness) measures whether those additions improve on the original recommender.
 
-## How The System Works
+It matters because the original had a documented weakness: exact-match labels gave `chill` and `relaxed` no credit for each other, and users had to speak the system's vocabulary. This version fixes that while keeping the ranking deterministic and every recommendation explainable. It also treats evaluation as a core feature rather than an afterthought.
 
-In general, recommender systems use a combination of content-based and collaborative filtering. Collaborative filtering relies on user behavior for similar users to predict which songs you are likely to have interest in. This is known as a clustering approach in machine learning. Content-based filtering evaluates the metadata and other attributes and features for a song to determine if it will interest you. Collaborative filtering does the heavy lifting without prior knowledge of your behavior while content-based is more personalized once specific data points are available for you.
+## Architecture Overview
 
-This recommender is content-based. It scores each song on its own by how well it fits the user's taste, then ranks all the scores and returns the best few. Energy is scored by closeness to the target, not by being higher or lower, and mood outweighs genre because mood better reflects what the listener wants right now. Acousticness is scored as a smaller preference signal: listeners who like acoustic music are rewarded for acoustic songs, and everyone else is rewarded for less acoustic ones.
+The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In short, data moves through five stages:
 
-- **Song features:** `energy`, `mood`, `genre`, and `acousticness` are scored. `tempo_bpm`, `valence`, and `danceability` are stored for later.
-- **UserProfile:** `favorite_genre`, `favorite_mood`, `target_energy`, `likes_acoustic`
-- **Score:** `0.40 * energy_score + 0.25 * mood_match + 0.20 * genre_match + 0.15 * acoustic_score`, for a maximum of 1.0, where:
-  - `energy_score = 1 - |song.energy - target_energy|`
-  - `mood_match` and `genre_match` are 1 for a match and 0 for a miss
-  - `acoustic_score = song.acousticness` if `likes_acoustic` is true, otherwise `1 - song.acousticness`
-- **Ranking:** score every song, sort high to low, and return the top `k` with the reasons for each score
+1. **Input and guardrails (implemented).** The user's request is cleaned before anything else happens: energy is clamped to 0-1, casing and whitespace are normalized, and unknown labels are flagged.
+2. **Query parser (keyword fallback implemented, Claude parser planned).** The Claude API will convert free text into a `UserProfile` (genre, mood, target energy, likes acoustic) and validate it against the labels in the catalog. If there is no API key or the call fails, the keyword parser in `src/parser.py` takes over so the project still runs offline. Today only the keyword parser exists.
+3. **Retriever (planned).** Local embeddings over song descriptions pull candidate songs by meaning. This is the RAG step: the system looks up information before answering.
+4. **Core recommender (existing).** `score_song()` and `recommend_songs()` rank the candidates and produce a reason for each score. Ranking stays deterministic and is never delegated to the LLM.
+5. **Output.** The top-k list with scores and reasons.
 
-Note that this system will prioritize mood over genre, energy is heavily weighted because it is a numeric feature and it uses exact matches for labels ignoring synonyms.
+**Testing and human checks.** Unit tests (pytest) cover the deterministic parts and mock the Claude parser. An evaluation harness runs the standard and adversarial profiles through the full pipeline, compares results to a golden set and to the non-RAG baseline, and writes a report. Humans stay in the loop at three points: reviewing the parsed profile and retrieved candidates, reading the recommendations and explanations, and reviewing the eval report before any weight or golden-set changes.
 
----
+## Setup Instructions
 
-## Getting Started
+1. **Clone the repository and enter it.**
 
-### Setup
+   ```bash
+   git clone <your-repo-url>
+   cd applied-ai-system-final
+   ```
 
-1. Create a virtual environment (optional but recommended):
+2. **Create and activate a virtual environment** (recommended).
 
    ```bash
    python -m venv .venv
    source .venv/bin/activate      # Mac or Linux
    .venv\Scripts\activate         # Windows
+   ```
 
-2. Install dependencies
+3. **Install dependencies.**
 
-```bash
-pip install -r requirements.txt
-```
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-3. Run the app:
+4. **(Planned) Set your Claude API key** to enable free-text parsing. This step is optional: without a key the app falls back to the keyword parser.
 
-```bash
-python -m src.main
-```
+   ```bash
+   export ANTHROPIC_API_KEY="your-key-here"     # Mac or Linux
+   $env:ANTHROPIC_API_KEY = "your-key-here"     # Windows PowerShell
+   ```
 
-If you run on Windows using PowerShell, use the below command instead.
+5. **Run the app.** With no arguments it runs the ten built-in profiles. Pass `--query` for a free-text request.
 
-```powershell
-python src/main.py
-```
+   ```bash
+   python -m src.main
+   python -m src.main --query "something mellow and acoustic to study to"
+   ```
 
-### Running Tests
+6. **Run the tests.**
 
-Run the starter tests with:
+   ```bash
+   python -m pytest
+   ```
 
-```bash
-pytest
-```
+7. **(Planned) Run the evaluation harness.** The exact command will be added when the harness is built.
 
-On Windows, use the below instead.
+## Sample Interactions
 
-```powershell
-python -m pytest
-```
+All three examples below are real output from the current code. Free-text parsing currently uses the offline keyword parser; the Claude parser and embedding retriever are still planned.
 
-You can add more tests in `tests/test_recommender.py`.
+### Example 1: Structured profile (works today)
 
----
-
-## Sample Recommendation Output
-
-Below is a sample command line example of the recommender's output on a Windows machine.
+**Input:** `genre=lofi, mood=chill, energy=0.40, likes_acoustic=True`
 
 ```
-============================================================
-TOP RECOMMENDATIONS
-Profile: lofi | chill | energy 0.40 | likes acoustic
-============================================================
-
-1. Library Rain - Paper Lanterns
-   Score: 0.96 / 1.00
-   Why:
+1. Library Rain - Paper Lanterns        Score: 0.96 / 1.00
      * energy 0.35 vs target 0.40 (+0.38)
      * mood match (+0.25)
      * genre match (+0.20)
      * acoustic fit 0.86 (+0.13)
-------------------------------------------------------------
 
-2. Midnight Coding - LoRoom
-   Score: 0.95 / 1.00
-   Why:
-     * energy 0.42 vs target 0.40 (+0.39)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.71 (+0.11)
-------------------------------------------------------------
-
-3. Spacewalk Thoughts - Orbit Bloom
-   Score: 0.74 / 1.00
-   Why:
-     * energy 0.28 vs target 0.40 (+0.35)
-     * mood match (+0.25)
-     * acoustic fit 0.92 (+0.14)
-------------------------------------------------------------
-
-4. Focus Flow - LoRoom
-   Score: 0.72 / 1.00
-   Why:
-     * energy 0.40 vs target 0.40 (+0.40)
-     * genre match (+0.20)
-     * acoustic fit 0.78 (+0.12)
-------------------------------------------------------------
-
-5. Porch Light Promise - Willow Creek
-   Score: 0.53 / 1.00
-   Why:
-     * energy 0.38 vs target 0.40 (+0.39)
-     * acoustic fit 0.91 (+0.14)
-------------------------------------------------------------
+2. Midnight Coding - LoRoom             Score: 0.95 / 1.00
+3. Spacewalk Thoughts - Orbit Bloom     Score: 0.74 / 1.00
 ```
 
-The examples below test additional profiles. I assessed three standard profiles and seven adversarial profiles to evaluate and stress test the system.
+### Example 2: Free-text request (works today with the keyword fallback parser)
+
+**Input:** `python -m src.main --query "something mellow and acoustic to study to"`
 
 ```
-Loading songs from data/songs.csv...
-Loaded songs: 20
+'lofi' | 'chill' | energy 0.35 | likes acoustic
 
-============================================================
-PROFILE: Starter lofi
-'lofi' | 'chill' | energy 0.40 | likes acoustic
-============================================================
-
-1. Library Rain - Paper Lanterns
-   Score: 0.96 / 1.00
-   Why:
-     * energy 0.35 vs target 0.40 (+0.38)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.86 (+0.13)
-------------------------------------------------------------
-
-2. Midnight Coding - LoRoom
-   Score: 0.95 / 1.00
-   Why:
-     * energy 0.42 vs target 0.40 (+0.39)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.71 (+0.11)
-------------------------------------------------------------
-
-3. Spacewalk Thoughts - Orbit Bloom
-   Score: 0.74 / 1.00
-   Why:
-     * energy 0.28 vs target 0.40 (+0.35)
-     * mood match (+0.25)
-     * acoustic fit 0.92 (+0.14)
-------------------------------------------------------------
-
-4. Focus Flow - LoRoom
-   Score: 0.72 / 1.00
-   Why:
-     * energy 0.40 vs target 0.40 (+0.40)
-     * genre match (+0.20)
-     * acoustic fit 0.78 (+0.12)
-------------------------------------------------------------
-
-5. Porch Light Promise - Willow Creek
-   Score: 0.53 / 1.00
-   Why:
-     * energy 0.38 vs target 0.40 (+0.39)
-     * acoustic fit 0.91 (+0.14)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Pop workout
-'pop' | 'chill' | energy 0.90 | prefers non-acoustic
-============================================================
-
-1. Gym Hero - Max Pulse
-   Score: 0.73 / 1.00
-   Why:
-     * energy 0.93 vs target 0.90 (+0.39)
-     * genre match (+0.20)
-     * acoustic fit 0.95 (+0.14)
-------------------------------------------------------------
-
-2. Sunrise City - Neon Echo
-   Score: 0.69 / 1.00
-   Why:
-     * energy 0.82 vs target 0.90 (+0.37)
-     * genre match (+0.20)
-     * acoustic fit 0.82 (+0.12)
-------------------------------------------------------------
-
-3. Storm Runner - Voltline
-   Score: 0.53 / 1.00
-   Why:
-     * energy 0.91 vs target 0.90 (+0.40)
-     * acoustic fit 0.90 (+0.14)
-------------------------------------------------------------
-
-4. Bassline Cathedral - Kinetic Drift
-   Score: 0.52 / 1.00
-   Why:
-     * energy 0.96 vs target 0.90 (+0.38)
-     * acoustic fit 0.97 (+0.15)
-------------------------------------------------------------
-
-5. Calle Fuego - Los Cometas
-   Score: 0.52 / 1.00
-   Why:
-     * energy 0.88 vs target 0.90 (+0.39)
-     * acoustic fit 0.85 (+0.13)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Rock intense
-'rock' | 'intense' | energy 0.70 | likes acoustic
-============================================================
-
-1. Storm Runner - Voltline
-   Score: 0.78 / 1.00
-   Why:
-     * energy 0.91 vs target 0.70 (+0.32)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.10 (+0.01)
-------------------------------------------------------------
-
-2. Gym Hero - Max Pulse
-   Score: 0.57 / 1.00
-   Why:
-     * energy 0.93 vs target 0.70 (+0.31)
-     * mood match (+0.25)
-     * acoustic fit 0.05 (+0.01)
-------------------------------------------------------------
-
-3. Rooftop Lights - Indigo Parade
-   Score: 0.43 / 1.00
-   Why:
-     * energy 0.76 vs target 0.70 (+0.38)
-     * acoustic fit 0.35 (+0.05)
-------------------------------------------------------------
-
-4. Dust Road Blues - Hollow Pines
-   Score: 0.42 / 1.00
-   Why:
-     * energy 0.48 vs target 0.70 (+0.31)
-     * acoustic fit 0.74 (+0.11)
-------------------------------------------------------------
-
-5. Night Drive Loop - Neon Echo
-   Score: 0.41 / 1.00
-   Why:
-     * energy 0.75 vs target 0.70 (+0.38)
-     * acoustic fit 0.22 (+0.03)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Conflict: high-energy sad classical
-'classical' | 'sad' | energy 0.90 | likes acoustic
-============================================================
-
-1. Moonlit Sonata Remix - Aria Vale
-   Score: 0.47 / 1.00
-   Why:
-     * energy 0.22 vs target 0.90 (+0.13)
-     * genre match (+0.20)
-     * acoustic fit 0.95 (+0.14)
-------------------------------------------------------------
-
-2. Calle Fuego - Los Cometas
-   Score: 0.41 / 1.00
-   Why:
-     * energy 0.88 vs target 0.90 (+0.39)
-     * acoustic fit 0.15 (+0.02)
-------------------------------------------------------------
-
-3. Storm Runner - Voltline
-   Score: 0.41 / 1.00
-   Why:
-     * energy 0.91 vs target 0.90 (+0.40)
-     * acoustic fit 0.10 (+0.01)
-------------------------------------------------------------
-
-4. Rooftop Lights - Indigo Parade
-   Score: 0.40 / 1.00
-   Why:
-     * energy 0.76 vs target 0.90 (+0.34)
-     * acoustic fit 0.35 (+0.05)
-------------------------------------------------------------
-
-5. Gym Hero - Max Pulse
-   Score: 0.40 / 1.00
-   Why:
-     * energy 0.93 vs target 0.90 (+0.39)
-     * acoustic fit 0.05 (+0.01)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Unknown genre and mood
-'vaporwave' | 'sad' | energy 0.50 | prefers non-acoustic
-============================================================
-
-1. Velvet Hours - Nina Solace
-   Score: 0.48 / 1.00
-   Why:
-     * energy 0.52 vs target 0.50 (+0.39)
-     * acoustic fit 0.60 (+0.09)
-------------------------------------------------------------
-
-2. Rainy Tokyo Nights - Mirai Kei
-   Score: 0.47 / 1.00
-   Why:
-     * energy 0.60 vs target 0.50 (+0.36)
-     * acoustic fit 0.72 (+0.11)
-------------------------------------------------------------
-
-3. Island Breeze - Salt & Sun
-   Score: 0.46 / 1.00
-   Why:
-     * energy 0.55 vs target 0.50 (+0.38)
-     * acoustic fit 0.55 (+0.08)
-------------------------------------------------------------
-
-4. Dust Road Blues - Hollow Pines
-   Score: 0.43 / 1.00
-   Why:
-     * energy 0.48 vs target 0.50 (+0.39)
-     * acoustic fit 0.26 (+0.04)
-------------------------------------------------------------
-
-5. Concrete Kingdom - Verse Theory
-   Score: 0.42 / 1.00
-   Why:
-     * energy 0.78 vs target 0.50 (+0.29)
-     * acoustic fit 0.91 (+0.14)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Out-of-range energy (1.5)
-'pop' | 'happy' | energy 1.50 | prefers non-acoustic
-============================================================
-
-1. Sunrise City - Neon Echo
-   Score: 0.70 / 1.00
-   Why:
-     * energy 0.82 vs target 1.50 (+0.13)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.82 (+0.12)
-------------------------------------------------------------
-
-2. Gym Hero - Max Pulse
-   Score: 0.51 / 1.00
-   Why:
-     * energy 0.93 vs target 1.50 (+0.17)
-     * genre match (+0.20)
-     * acoustic fit 0.95 (+0.14)
-------------------------------------------------------------
-
-3. Rooftop Lights - Indigo Parade
-   Score: 0.45 / 1.00
-   Why:
-     * energy 0.76 vs target 1.50 (+0.10)
-     * mood match (+0.25)
-     * acoustic fit 0.65 (+0.10)
-------------------------------------------------------------
-
-4. Iron Throne - Black Ember
-   Score: 0.33 / 1.00
-   Why:
-     * energy 0.97 vs target 1.50 (+0.19)
-     * acoustic fit 0.96 (+0.14)
-------------------------------------------------------------
-
-5. Bassline Cathedral - Kinetic Drift
-   Score: 0.33 / 1.00
-   Why:
-     * energy 0.96 vs target 1.50 (+0.18)
-     * acoustic fit 0.97 (+0.15)
-------------------------------------------------------------
-
-============================================================
-PROFILE: No matches, no acoustic pref
-'k-pop' | 'zen' | energy 0.50 | no acoustic preference
-============================================================
-
-1. Dust Road Blues - Hollow Pines
-   Score: 0.39 / 1.00
-   Why:
-     * energy 0.48 vs target 0.50 (+0.39)
-------------------------------------------------------------
-
-2. Velvet Hours - Nina Solace
-   Score: 0.39 / 1.00
-   Why:
-     * energy 0.52 vs target 0.50 (+0.39)
-------------------------------------------------------------
-
-3. Island Breeze - Salt & Sun
-   Score: 0.38 / 1.00
-   Why:
-     * energy 0.55 vs target 0.50 (+0.38)
-------------------------------------------------------------
-
-4. Midnight Coding - LoRoom
-   Score: 0.37 / 1.00
-   Why:
-     * energy 0.42 vs target 0.50 (+0.37)
-------------------------------------------------------------
-
-5. Focus Flow - LoRoom
-   Score: 0.36 / 1.00
-   Why:
-     * energy 0.40 vs target 0.50 (+0.36)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Metal fan wants calm
-'metal' | 'chill' | energy 0.10 | likes acoustic
-============================================================
-
-1. Spacewalk Thoughts - Orbit Bloom
-   Score: 0.72 / 1.00
-   Why:
-     * energy 0.28 vs target 0.10 (+0.33)
-     * mood match (+0.25)
-     * acoustic fit 0.92 (+0.14)
-------------------------------------------------------------
-
-2. Library Rain - Paper Lanterns
-   Score: 0.68 / 1.00
-   Why:
-     * energy 0.35 vs target 0.10 (+0.30)
-     * mood match (+0.25)
-     * acoustic fit 0.86 (+0.13)
-------------------------------------------------------------
-
-3. Midnight Coding - LoRoom
-   Score: 0.63 / 1.00
-   Why:
-     * energy 0.42 vs target 0.10 (+0.27)
-     * mood match (+0.25)
-     * acoustic fit 0.71 (+0.11)
-------------------------------------------------------------
-
-4. Moonlit Sonata Remix - Aria Vale
-   Score: 0.49 / 1.00
-   Why:
-     * energy 0.22 vs target 0.10 (+0.35)
-     * acoustic fit 0.95 (+0.14)
-------------------------------------------------------------
-
-5. Coffee Shop Stories - Slow Stereo
-   Score: 0.43 / 1.00
-   Why:
-     * energy 0.37 vs target 0.10 (+0.29)
-     * acoustic fit 0.89 (+0.13)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Messy casing and whitespace
-'Lofi ' | 'CHILL' | energy 0.40 | likes acoustic
-============================================================
-
-1. Library Rain - Paper Lanterns
-   Score: 0.76 / 1.00
-   Why:
-     * energy 0.35 vs target 0.40 (+0.38)
-     * mood match (+0.25)
-     * acoustic fit 0.86 (+0.13)
-------------------------------------------------------------
-
-2. Midnight Coding - LoRoom
-   Score: 0.75 / 1.00
-   Why:
-     * energy 0.42 vs target 0.40 (+0.39)
-     * mood match (+0.25)
-     * acoustic fit 0.71 (+0.11)
-------------------------------------------------------------
-
-3. Spacewalk Thoughts - Orbit Bloom
-   Score: 0.74 / 1.00
-   Why:
-     * energy 0.28 vs target 0.40 (+0.35)
-     * mood match (+0.25)
-     * acoustic fit 0.92 (+0.14)
-------------------------------------------------------------
-
-4. Porch Light Promise - Willow Creek
-   Score: 0.53 / 1.00
-   Why:
-     * energy 0.38 vs target 0.40 (+0.39)
-     * acoustic fit 0.91 (+0.14)
-------------------------------------------------------------
-
-5. Coffee Shop Stories - Slow Stereo
-   Score: 0.52 / 1.00
-   Why:
-     * energy 0.37 vs target 0.40 (+0.39)
-     * acoustic fit 0.89 (+0.13)
-------------------------------------------------------------
-
-============================================================
-PROFILE: Acoustic lover wants EDM
-'edm' | 'euphoric' | energy 0.96 | likes acoustic
-============================================================
-
-1. Bassline Cathedral - Kinetic Drift
-   Score: 0.85 / 1.00
-   Why:
-     * energy 0.96 vs target 0.96 (+0.40)
-     * mood match (+0.25)
-     * genre match (+0.20)
-     * acoustic fit 0.03 (+0.00)
-------------------------------------------------------------
-
-2. Iron Throne - Black Ember
-   Score: 0.40 / 1.00
-   Why:
-     * energy 0.97 vs target 0.96 (+0.40)
-     * acoustic fit 0.04 (+0.01)
-------------------------------------------------------------
-
-3. Gym Hero - Max Pulse
-   Score: 0.40 / 1.00
-   Why:
-     * energy 0.93 vs target 0.96 (+0.39)
-     * acoustic fit 0.05 (+0.01)
-------------------------------------------------------------
-
-4. Storm Runner - Voltline
-   Score: 0.40 / 1.00
-   Why:
-     * energy 0.91 vs target 0.96 (+0.38)
-     * acoustic fit 0.10 (+0.01)
-------------------------------------------------------------
-
-5. Calle Fuego - Los Cometas
-   Score: 0.39 / 1.00
-   Why:
-     * energy 0.88 vs target 0.96 (+0.37)
-     * acoustic fit 0.15 (+0.02)
-------------------------------------------------------------
+1. Library Rain - Paper Lanterns        Score: 0.98 / 1.00
+   Why: energy 0.35 vs target 0.35 (+0.40), mood match (+0.25),
+        genre match (+0.20), acoustic fit 0.86 (+0.13)
+2. Midnight Coding - LoRoom             Score: 0.93 / 1.00
+3. Spacewalk Thoughts - Orbit Bloom     Score: 0.76 / 1.00
 ```
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or demo video link here -->
+The word "mellow" is not a label in the catalog. Without a parser it would score zero for mood; the keyword parser maps it to `chill`. The Claude parser and embedding retriever (planned) will handle phrasings the keyword lists don't cover.
 
----
+### Example 3: Messy input and the guardrails (works today)
 
-## Experiments You Tried
+**Input:** genre `'Lofi '` (capital letter, trailing space), mood `'CHILL'`, energy 0.40
 
-I tried a small experiment where the mood feature was commented out and not considered. Of the 10 user profiles, removing mood only changed the recommendations for four of them. This shows that mood is a weak feature in this recommender system. Energy and genre are more powerful predictors in the implemented algorithm.
+| | Genre match | Top score |
+|---|---|---|
+| **Before guardrails** | Lost, because the trailing space breaks the exact match | 0.76 |
+| **With guardrails** | Restored after trimming whitespace | 0.96 |
 
----
+The CLI now prints a warning for each fix:
 
-## Limitations and Risks
+```
+! genre 'Lofi ' normalized to 'lofi'
+! mood 'CHILL' normalized to 'chill'
+```
 
-Expected biases and limitations of this scoring rule:
+Energy `1.50` is likewise clamped to 1.0 with the warning `energy 1.5 is out of range and was clamped to 1.0`.
 
-- **Mood can crowd out genre.** Because mood (0.25) outweighs genre (0.20), a song with the right mood but the wrong genre can beat a song in the user's favorite genre. For a `lofi`/`chill` listener, Spacewalk Thoughts (ambient, chill) can outrank Focus Flow (lofi, focused).
-- **Exact-match labels are all or nothing.** Near-synonyms such as `chill`/`relaxed` or `pop`/`indie pop` get zero credit, so good songs can be missed on a technicality.
-- **Energy carries the most weight.** At 0.40, and because energy values are bunched together, the ranking can drift toward songs with the right energy but little else in common with the user's taste.
-- **The acoustic preference is binary.** A user with `likes_acoustic = false` is rewarded for non-acoustic songs even if they simply have no opinion, which quietly penalizes folk, jazz and classical.
-- **The catalog is tiny and uneven.** Most genres have a single song, while `lofi` and `chill` appear three times each, so lofi/chill listeners get more variety than everyone else.
-- **It can create a filter bubble.** The system only scores similarity to a stated profile, so it never suggests anything outside the user's stated tastes, and it does not understand lyrics or language.
+## Design Decisions
 
----
+- **Hybrid LLM and local retrieval.** Claude handles the part where an LLM is clearly strongest: understanding vague language. Retrieval and ranking stay local, so they are free, offline, and reproducible. The trade-off is two moving parts instead of one.
+- **The LLM never ranks.** Scoring remains the original transparent formula. This keeps explanations faithful to the real score and makes evaluation stable. The trade-off is that the system can't use the LLM's broader musical judgment.
+- **Validate everything the LLM returns.** The parser's output is checked against the labels in the CSV, so a hallucinated genre or mood can't reach the scorer.
+- **Graceful fallback.** A keyword parser means a missing API key or network failure degrades the experience instead of breaking it, and graders can run the project without credentials.
+- **Evaluation is a first-class component.** Because the Claude step is non-deterministic, the Claude parser is mocked in unit tests and checked separately against a golden set of phrase-to-profile pairs.
+- **Expanded catalog.** The original 20 songs, mostly one per genre, were too few for retrieval or precision@k to mean much. The catalog now has 80 songs with at least 3 per genre, four new genres (afrobeats, k-pop, bossa nova, blues) to reduce the Western-music bias noted in the model card, and a `description` column for the retriever. Data-quality tests in `tests/test_catalog.py` guard it. The songs are fictional, and 80 songs is still small, so results should not be read as evidence about real-world catalogs.
+
+## Testing Summary
+
+**What has been tested so far (original system).** Ten hand-written profiles (three standard, seven adversarial) were run through the scorer and the output was read by hand. On the original 20-song catalog, a mood-ablation experiment, where mood was commented out of the score, changed the recommendations for only four of the ten profiles. (This has not been re-run on the 80-song catalog.) This showed that mood is a weak signal and that energy and genre dominate the ranking.
+
+**What worked.** The scorer is deterministic and every result comes with a reason, which made failures easy to spot. The adversarial profiles exposed real limitations.
+
+**What didn't.**
+- A trailing space in a profile label silently broke the genre match (see Example 3).
+- Out-of-range energy (1.5) was accepted without complaint.
+- Unknown genres and moods fell back to energy-only ranking with no warning.
+- Review was manual, so nothing would catch a regression if the weights changed.
+
+**What the new system will add (planned).** Pytest tests for score bounds and ranking determinism, guardrail tests for clamping and normalization, a golden-set evaluation reporting precision@k and consistency, and a side-by-side comparison of the original recommender against the RAG version.
+
+**What I learned so far.** Hand-reading output doesn't scale, and the failures worth catching are the quiet ones: results that look plausible but are wrong. That is the main reason the testing system is part of the plan.
+
+> Fill in the real pass/fail counts and metrics here after the harness runs.
 
 ## Reflection
 
-Read and complete `model_card.md`:
+The original project taught me that a recommender is a set of design choices: which features to score, how to weight them, and who gets left out. Extending it taught me that adding an AI component, like an LLM or a retriever, doesn't remove those choices. It moves them. Using Claude for language and keeping the ranking deterministic was a decision about where to trust a model and where to keep control. Planning the evaluation before writing the features made the project's goal clearer: the question isn't whether the new version feels smarter, it's whether it measurably does better than the baseline.
 
-[**Model Card**](model_card.md)
+> Revise this section in your own words after the implementation is finished.
 
-Write 1 to 2 paragraphs here about what you learned:
+## Project Files
 
-- about how recommenders turn data into predictions
-
-I learned that there are two main recommender systems: content-based and collaborative filtering. Most modern systems use a combination of both. The content-based approach looks at metadata for the song and implements an algorithmic model to predict if it matches a user's tastes. The collaborative filtering approach instead looks at the behavior of similar users to recommend things. In practice, content-based is applied first and collaborative filtering is employed later to match user tastes more closely. The data from the songs and other users is vital to making these systems work. In this project, we only used a content-based approach which does have significant drawbacks.
-
-- about where bias or unfairness could show up in systems like this
-
-The content-based approach is limited by the available song catalog and the robustness of the scoring. Using exact word matches or placing too much weight in a specific feature will prioritize most users at the expense of unique tastes. For example, there may be a bias for English-language songs which dominate catalogs. Certain genres and moods might be less popular or less common in certain countries, thus introducing favoritism towards more common or numerous combinations such as in developed countries.
-
-
-
+- [diagrams/architecture.md](diagrams/architecture.md): system architecture diagram
+- [model_card.md](model_card.md): model card for the original recommender
+- [ai_interactions.md](ai_interactions.md): log of AI interactions
+- `src/`: recommender code
+- `data/songs.csv`: song catalog
+- `tests/`: pytest tests

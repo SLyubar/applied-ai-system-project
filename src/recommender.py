@@ -1,6 +1,22 @@
 import csv
 from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+
+from src.guardrails import sanitize_profile
+
+
+def _profile_to_prefs(user: "UserProfile") -> Dict:
+    """Convert a UserProfile to the dict the scorer expects, cleaning labels and energy."""
+    prefs, _warnings = sanitize_profile(
+        {
+            "genre": user.favorite_genre,
+            "mood": user.favorite_mood,
+            "energy": user.target_energy,
+            "likes_acoustic": user.likes_acoustic,
+        }
+    )
+    return prefs
+
 
 @dataclass
 class Song:
@@ -18,6 +34,7 @@ class Song:
     valence: float
     danceability: float
     acousticness: float
+    description: str = ""  # free text used by the retriever
 
 @dataclass
 class UserProfile:
@@ -39,12 +56,21 @@ class Recommender:
         self.songs = songs
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
-        # TODO: Implement recommendation logic
-        return self.songs[:k]
+        """Return the top k songs for this user, highest score first.
+
+        Uses the same scoring rule as recommend_songs(). Ties keep catalog order.
+        """
+        if k <= 0:
+            return []
+        prefs = _profile_to_prefs(user)
+        scored = [(song, score_song(prefs, asdict(song))[0]) for song in self.songs]
+        scored.sort(key=lambda item: item[1], reverse=True)  # sort is stable
+        return [song for song, _ in scored[:k]]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
-        # TODO: Implement explanation logic
-        return "Explanation placeholder"
+        """Explain a song's score as '<score> / 1.00: reason; reason; ...'."""
+        score, reasons = score_song(_profile_to_prefs(user), asdict(song))
+        return f"{score:.2f} / 1.00: " + "; ".join(reasons)
 
 WEIGHTS = {"energy": 0.40, "mood": 0.25, "genre": 0.20, "acoustic": 0.15}
 
