@@ -2,7 +2,7 @@
 
 Run `python -m src.evaluation` for the report. The pipelines are pluggable
 (`rank_fn`, `parse_fn`) so the same golden set can compare the baseline with the
-planned Claude parser and embedding retriever.
+Gemini parser and the planned embedding retriever.
 """
 
 import argparse
@@ -15,10 +15,11 @@ from src.guardrails import known_labels, sanitize_profile
 from src.parser import get_parse_fn
 from src.recommender import load_songs, recommend_songs
 
-FALLBACK_NOTE_PREFIX = "Claude parser unavailable"  # see src/claude_parser.py
+FALLBACK_NOTE_PREFIX = "Gemini parser unavailable"  # see src/gemini_parser.py
 GOLDEN_PATH = "data/golden_set.json"
 SONGS_PATH = "data/songs.csv"
 DEFAULT_K = 5
+MAX_RUNS = 20  # each live run makes about 21 API calls; cap accidental spending
 
 # rank_fn(raw_profile, songs, k) -> (ranked song ids, warnings)
 RankFn = Callable[[Dict, List[Dict], int], Tuple[List[int], List[str]]]
@@ -265,6 +266,120 @@ def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
     }
 
 
+# ---------------------------------------------------------------- repeated runs
+
+# (row label, key in summarize(), how to format)
+MULTI_RUN_ROWS = [
+    ("Ranking cases passed", "ranking_cases_passed", "count"),
+    ("Top-1 relevant rate", "top1_rate", "pct"),
+    ("Mean nDCG", "mean_ndcg", "dec"),
+    ("Mean precision", "mean_precision", "dec"),
+    ("Mean reciprocal rank", "mrr", "dec"),
+    ("Parser phrases passed", "parser_passed", "count"),
+    ("Parser accuracy, easy", "parser_easy", "pct"),
+    ("Parser accuracy, hard", "parser_hard", "pct"),
+    ("Forbidden songs recommended", "forbidden_hits", "count"),
+]
+
+
+def _format_stat(values: List[float], kind: str) -> str:
+    mean, low, high = sum(values) / len(values), min(values), max(values)
+    if kind == "pct":
+        return f"{mean:.0%} ({low:.0%} to {high:.0%})"
+    if kind == "count":
+        return f"{mean:.1f} ({low:g} to {high:g})"
+    return f"{mean:.2f} ({low:.2f} to {high:.2f})"
+
+
+def aggregate_runs(runs: List[Tuple[List[Dict], List[Dict]]]) -> Dict:
+    """Combine several (ranking, parsing) runs into per-metric lists and per-case pass counts.
+
+    Returns {"summaries": [summarize() per run], "cases": [...]}, where each case entry
+    has its kind ("parser" or "ranking query"), name, passes, runs, and fallbacks. Only
+    cases that depend on the parser appear; profile cases never use it.
+    """
+    summaries = [summarize(ranking, parsing) for ranking, parsing in runs]
+    cases: Dict[Tuple[str, str], Dict] = {}
+
+    def record(kind: str, name: str, passed: bool, fell_back: bool) -> None:
+        entry = cases.setdefault((kind, name), {"kind": kind, "name": name, "passes": 0, "runs": 0, "fallbacks": 0})
+        entry["runs"] += 1
+        entry["passes"] += 1 if passed else 0
+        entry["fallbacks"] += 1 if fell_back else 0
+
+    for ranking, parsing in runs:
+        for p in parsing:
+            record("parser", p["query"], p["passed"], p.get("fell_back", False))
+        for r in ranking:
+            if r.get("is_query"):
+                record("ranking query", r["name"], r["passed"], r.get("fell_back", False))
+    return {"summaries": summaries, "cases": list(cases.values())}
+
+
+def format_multi_run_report(
+    runs: List[Tuple[List[Dict], List[Dict]]],
+    deterministic: bool,
+    songs: List[Dict],
+    k: int = DEFAULT_K,
+    label: str = "baseline",
+) -> str:
+    n = len(runs)
+    agg = aggregate_runs(runs)
+    summaries = agg["summaries"]
+    first_ranking, first_parsing = runs[0]
+    fallbacks = sum(s["parser_fallbacks"] + s["ranking_fallbacks"] for s in summaries)
+    possible = n * (summaries[0]["parser_total"] + summaries[0]["ranking_query_cases"])
+
+    lines: List[str] = [
+        f"# Evaluation report ({label}, {n} runs)",
+        "",
+        f"Catalog: {len(songs)} songs. Golden set: {len(first_ranking)} ranking cases, {len(first_parsing)} parser cases. "
+        f"Each cell shows the mean over {n} runs, with the range in parentheses.",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Mean (min to max) |",
+        "|---|---|",
+    ]
+    for row_label, key, kind in MULTI_RUN_ROWS:
+        suffix = f"@{k}" if key in ("mean_ndcg", "mean_precision") else ""
+        suffix += {"ranking_cases_passed": f" (of {summaries[0]['ranking_cases_total']})",
+                   "parser_passed": f" (of {summaries[0]['parser_total']})"}.get(key, "")
+        lines.append(f"| {row_label}{suffix} | {_format_stat([s[key] for s in summaries], kind)} |")
+    lines += [
+        f"| Deterministic profile cases (repeat runs identical) | {'yes' if deterministic else 'NO'} |",
+        f"| Answers that fell back to keywords | {fallbacks}/{possible} |",
+        "",
+        "## Case stability",
+        "",
+        "Only cases that use the parser can vary between runs. Unstable cases are listed first.",
+        "",
+        "| Case | Type | Passed | Fell back |",
+        "|---|---|---|---|",
+    ]
+    ordered = sorted(agg["cases"], key=lambda c: (c["passes"] in (0, c["runs"]), c["passes"] / c["runs"], c["name"]))
+    for c in ordered:
+        mark = "" if c["passes"] in (0, c["runs"]) else " (unstable)"
+        lines.append(f"| {c['name']} | {c['kind']} | {c['passes']}/{c['runs']}{mark} | {c['fallbacks']}/{c['runs']} |")
+
+    unstable = [c["name"] for c in agg["cases"] if 0 < c["passes"] < c["runs"]]
+    always_fail = [c["name"] for c in agg["cases"] if c["passes"] == 0]
+    lines += ["", "## Needs human review", "",
+              "- The golden set is a set of human judgments. Check `data/golden_set.json` before trusting any number above."]
+    if fallbacks:
+        lines.append(
+            f"- **{fallbacks} answer(s) came from the keyword fallback, not Gemini.** "
+            "The numbers above do not measure Gemini alone. Check credentials, quota and network, then re-run."
+        )
+    if unstable:
+        lines.append(f"- Unstable between runs: {'; '.join(unstable)}.")
+    if always_fail:
+        lines.append(f"- Failed in every run: {'; '.join(always_fail)}.")
+    if n < 5:
+        lines.append(f"- Only {n} runs: ranges are rough. Use 5 or more for a meaningful spread.")
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------- report
 
 def format_report(
@@ -334,8 +449,8 @@ def format_report(
     fallbacks = s["parser_fallbacks"] + s["ranking_fallbacks"]
     if fallbacks:
         lines.append(
-            f"- **{fallbacks} answer(s) came from the keyword fallback, not Claude.** "
-            "The numbers above do not measure Claude alone. Check credentials and network, then re-run."
+            f"- **{fallbacks} answer(s) came from the keyword fallback, not Gemini.** "
+            "The numbers above do not measure Gemini alone. Check credentials and network, then re-run."
         )
     if no_truth:
         lines.append(f"- Cases with no ground truth, checked only for warnings: {', '.join(no_truth)}.")
@@ -351,10 +466,17 @@ def main(argv: Sequence[str] = None) -> int:
     arg_parser.add_argument("--label", help="name shown in the report title")
     arg_parser.add_argument("--strict", action="store_true", help="exit 1 if any case fails")
     arg_parser.add_argument(
-        "--parser", choices=["keyword", "claude"], default="keyword",
-        help="query parser to evaluate; 'claude' makes live API calls (needs credentials)",
+        "--runs", type=int, default=1,
+        help=f"repeat the whole evaluation N times (1 to {MAX_RUNS}) and report mean and range; "
+             "useful for a non-deterministic parser. Each live gemini run makes about 21 API calls.",
+    )
+    arg_parser.add_argument(
+        "--parser", choices=["keyword", "gemini"], default="keyword",
+        help="query parser to evaluate; 'gemini' makes live API calls (needs credentials)",
     )
     args = arg_parser.parse_args(argv)
+    if not 1 <= args.runs <= MAX_RUNS:
+        arg_parser.error(f"--runs must be between 1 and {MAX_RUNS}")
     if args.label is None:
         args.label = "baseline" if args.parser == "keyword" else f"{args.parser} parser"
 
@@ -362,17 +484,28 @@ def main(argv: Sequence[str] = None) -> int:
     golden = load_golden()
 
     parse_fn = get_parse_fn(args.parser)
-    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k, parse_fn)
-    parsing = evaluate_parser(golden["parser_cases"], songs, parse_fn)
+    runs = [
+        (
+            evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k, parse_fn),
+            evaluate_parser(golden["parser_cases"], songs, parse_fn),
+        )
+        for _ in range(args.runs)
+    ]
     deterministic = is_deterministic(golden["ranking_cases"], songs, baseline_rank, args.k)
 
-    report = format_report(ranking, parsing, deterministic, songs, args.k, args.label)
+    if args.runs == 1:
+        report = format_report(runs[0][0], runs[0][1], deterministic, songs, args.k, args.label)
+    else:
+        report = format_multi_run_report(runs, deterministic, songs, args.k, args.label)
     print(report)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report)
 
-    all_passed = all(r["passed"] for r in ranking) and all(p["passed"] for p in parsing) and deterministic
+    # --strict requires every run to pass everything.
+    all_passed = deterministic and all(
+        all(r["passed"] for r in ranking) and all(p["passed"] for p in parsing) for ranking, parsing in runs
+    )
     return 0 if (all_passed or not args.strict) else 1
 
 

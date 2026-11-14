@@ -1,28 +1,35 @@
-"""Claude-powered query parser with a keyword-parser fallback.
+"""Gemini-powered query parser with a keyword-parser fallback.
 
 Turns free text such as "music to fall asleep to" into the profile dict the scorer
-expects. Claude only *describes the listener*; ranking stays in the deterministic
-scorer. Everything Claude returns is validated against the catalog before use, so a
+expects. Gemini only *describes the listener*; ranking stays in the deterministic
+scorer. Everything Gemini returns is validated against the catalog before use, so a
 hallucinated genre or mood can never reach the scorer.
 
-If the API is unavailable (no credentials, network error, refusal, bad output) the
-keyword parser in src/parser.py takes over, so the project always runs.
+If the API is unavailable (no credentials, network error, blocked or incomplete
+response, bad output) the keyword parser in src/parser.py takes over, so the
+project always runs.
+
+Credentials: set GEMINI_API_KEY (or GOOGLE_API_KEY) in the environment.
+Model: defaults to MODEL below; override with the GEMINI_MODEL environment variable.
 """
 
+import os
 from typing import Dict, Iterable, List, Optional, Tuple
 
-import anthropic
+from google import genai
+from google.genai import errors as genai_errors
 from pydantic import BaseModel, Field
 
 from src.guardrails import normalize_label
 from src.parser import DEFAULT_ENERGY, parse_query
 
-MODEL = "claude-haiku-5-5"
-MAX_TOKENS = 2048  # thinking is on by default for this model, so leave headroom
+# Cheapest stable "Flash-Lite" model listed in Google's model docs when this was written.
+# Model names change; set GEMINI_MODEL to use a different one without editing code.
+MODEL = "gemini-3.5-flash-lite"
 
 
 class ParsedProfile(BaseModel):
-    """Schema Claude must fill in. Validated again in code after parsing."""
+    """Schema Gemini must fill in. Validated again in code after parsing."""
 
     genre: str = Field(description="Exactly one allowed genre, or an empty string if none fits.")
     mood: str = Field(description="Exactly one allowed mood, or an empty string if none fits.")
@@ -55,17 +62,17 @@ def build_system_prompt(known_genres: Iterable[str], known_moods: Iterable[str])
 def _validate(
     parsed: ParsedProfile, known_genres: Iterable[str], known_moods: Iterable[str]
 ) -> Tuple[Dict, List[str]]:
-    """Turn Claude's output into a safe profile, discarding anything outside the catalog."""
+    """Turn Gemini's output into a safe profile, discarding anything outside the catalog."""
     notes: List[str] = []
     genres, moods = set(known_genres), set(known_moods)
 
     genre = normalize_label(parsed.genre)
     if genre and genre not in genres:
-        notes.append(f"Claude returned genre {parsed.genre!r}, which is not in the catalog; ignored")
+        notes.append(f"Gemini returned genre {parsed.genre!r}, which is not in the catalog; ignored")
         genre = ""
     mood = normalize_label(parsed.mood)
     if mood and mood not in moods:
-        notes.append(f"Claude returned mood {parsed.mood!r}, which is not in the catalog; ignored")
+        notes.append(f"Gemini returned mood {parsed.mood!r}, which is not in the catalog; ignored")
         mood = ""
 
     if parsed.energy is None or parsed.energy != parsed.energy:  # None or NaN
@@ -74,7 +81,7 @@ def _validate(
     else:
         energy = min(1.0, max(0.0, float(parsed.energy)))
         if energy != parsed.energy:
-            notes.append(f"Claude returned energy {parsed.energy}; clamped to {energy}")
+            notes.append(f"Gemini returned energy {parsed.energy}; clamped to {energy}")
 
     if not genre:
         notes.append("no genre recognized; genre will not contribute to scores")
@@ -87,11 +94,11 @@ def _validate(
     return profile, notes
 
 
-def make_claude_parser(client=None, model: str = MODEL, fallback=parse_query):
+def make_gemini_parser(client=None, model: Optional[str] = None, fallback=parse_query):
     """Build a parse_fn(query, known_genres, known_moods) -> (profile, notes).
 
-    `client` is an anthropic.Anthropic (or a test double with a compatible
-    `messages.parse`). It is created lazily from the environment when omitted.
+    `client` is a google.genai Client (or a test double with a compatible
+    `interactions.create`). It is created lazily from the environment when omitted.
     """
     state = {"client": client}
 
@@ -102,34 +109,40 @@ def make_claude_parser(client=None, model: str = MODEL, fallback=parse_query):
 
         def use_fallback(reason: str) -> Tuple[Dict, List[str]]:
             profile, notes = fallback(query, genres, moods)
-            return profile, [f"Claude parser unavailable ({reason}); used keyword parser"] + notes
+            return profile, [f"Gemini parser unavailable ({reason}); used keyword parser"] + notes
 
         if state["client"] is None:
-            state["client"] = anthropic.Anthropic()
+            try:
+                state["client"] = genai.Client()
+            except ValueError:
+                # The SDK raises ValueError when no API key is configured.
+                return use_fallback("no API credentials")
 
         try:
-            response = state["client"].messages.parse(
-                model=model,
-                max_tokens=MAX_TOKENS,
-                output_config={"effort": "low"},
-                system=build_system_prompt(genres, moods),
-                messages=[{"role": "user", "content": f"<request>{query}</request>"}],
-                output_format=ParsedProfile,
+            interaction = state["client"].interactions.create(
+                model=model or os.environ.get("GEMINI_MODEL") or MODEL,
+                system_instruction=build_system_prompt(genres, moods),
+                input=f"<request>{query}</request>",
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": ParsedProfile.model_json_schema(),
+                },
             )
-        except anthropic.APIError as error:
+        except genai_errors.APIError as error:
             detail = " ".join(str(getattr(error, "message", error)).split())[:140]
-            return use_fallback(f"{type(error).__name__}: {detail}")
-        except TypeError as error:
-            # The SDK raises TypeError when no credentials are configured. Re-raise anything else.
-            if "authentication" in str(error).lower():
-                return use_fallback("no API credentials")
-            raise
+            return use_fallback(f"{type(error).__name__} {getattr(error, 'code', '')}: {detail}".replace("  ", " "))
 
-        if getattr(response, "stop_reason", None) == "refusal":
-            return use_fallback("request was declined")
-        parsed = getattr(response, "parsed_output", None)
-        if parsed is None:
-            return use_fallback(f"no usable output, stop_reason={getattr(response, 'stop_reason', None)}")
+        status = getattr(interaction, "status", None)
+        if status != "completed":
+            return use_fallback(f"response status was {status!r}")
+        text = getattr(interaction, "output_text", None)
+        if not text:
+            return use_fallback("empty response")
+        try:
+            parsed = ParsedProfile.model_validate_json(text)
+        except ValueError:  # pydantic's ValidationError is a ValueError
+            return use_fallback("response did not match the schema")
 
         return _validate(parsed, genres, moods)
 

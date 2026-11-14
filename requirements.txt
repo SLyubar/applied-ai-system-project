@@ -1,4 +1,4 @@
 pandas
 pytest
 streamlit
-anthropic>=2.6
+google-genai>=3.3

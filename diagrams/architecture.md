@@ -13,7 +13,7 @@ flowchart TD
 
     %% ---------- RAG ----------
     subgraph RAG["2. Retrieval (NEW - RAG)"]
-        QP["Query Parser - Claude API<br/>text to UserProfile<br/>validated against known labels<br/>fallback: keyword parser if no key or API error"]
+        QP["Query Parser - Gemini API<br/>text to UserProfile<br/>validated against known labels<br/>fallback: keyword parser if no key or API error"]
         RET["Retriever - local embeddings<br/>over song descriptions<br/>deterministic, offline, free"]
         CAND["Candidate Songs<br/>top N from index"]
     end
@@ -34,7 +34,7 @@ flowchart TD
     %% ---------- RELIABILITY ----------
     subgraph REL["5. Reliability and Testing (NEW)"]
         GUARD["Input Guardrails<br/>clamp energy 0-1<br/>normalize case and whitespace<br/>flag unknown labels"]
-        UNIT["Unit Tests - pytest<br/>score bounds 0 to 1<br/>deterministic ranking<br/>Claude parser mocked"]
+        UNIT["Unit Tests - pytest<br/>score bounds 0 to 1<br/>deterministic ranking<br/>Gemini parser mocked"]
         EVAL["Evaluation Harness<br/>10 standard + adversarial profiles<br/>precision@k, consistency,<br/>mood-ablation, RAG vs baseline"]
         GOLD[("Golden Set<br/>expected top songs per profile<br/>+ phrase to profile pairs<br/>for the parser")]
         REPORT["Eval Report<br/>pass/fail + metrics"]
@@ -100,7 +100,7 @@ flowchart TD
 
 **Data flow (input, process, output)**
 1. The user's request passes through the input guardrails, which clamp and normalize it.
-2. The Claude-powered query parser turns the request into a `UserProfile`, checked against the known genre and mood labels. If there is no API key or the call fails, a keyword parser takes over. The local embedding retriever then uses the profile and the song index to pull candidate songs, matching on meaning rather than exact labels.
+2. The Gemini-powered query parser turns the request into a `UserProfile`, checked against the known genre and mood labels. If there is no API key or the call fails, a keyword parser takes over. The local embedding retriever then uses the profile and the song index to pull candidate songs, matching on meaning rather than exact labels.
 3. The existing `score_song()` and `recommend_songs()` rank the candidates. Scoring stays deterministic and explainable.
 4. The output is the top-k list with a reason for each score.
 

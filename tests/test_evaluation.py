@@ -1,6 +1,9 @@
 import pytest
 
 from src.evaluation import (
+    MAX_RUNS,
+    aggregate_runs,
+    format_multi_run_report,
     FALLBACK_NOTE_PREFIX,
     baseline_rank,
     check_parse,
@@ -209,7 +212,7 @@ def test_baseline_never_recommends_a_forbidden_song(golden, songs):
 
 
 def test_baseline_keyword_parser_fails_the_hard_queries_end_to_end(golden, songs):
-    """Documents the headroom the Claude parser is meant to close. If this starts
+    """Documents the headroom the Gemini parser is meant to close. If this starts
     failing because the keyword parser improved, update the baseline report."""
     results = {r["name"]: r for r in evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)}
     assert not results["Query: fall asleep"]["passed"]
@@ -333,7 +336,7 @@ def test_fallback_in_a_query_case_is_flagged_and_counted(songs):
     assert results[0]["fell_back"]
     summary = summarize(results, [])
     assert summary["ranking_fallbacks"] == 1
-    report = format_report(results, [], True, songs, label="claude parser")
+    report = format_report(results, [], True, songs, label="gemini parser")
     assert "came from the keyword fallback" in report
 
 
@@ -347,3 +350,83 @@ def test_determinism_check_ignores_query_cases(songs):
     cases = [{"name": "q", "query": "x", "acceptable_ids": [1]}]
     assert is_deterministic(cases, songs, flaky)
     assert calls["n"] == 0
+
+
+# ---- repeated runs (--runs) ----
+
+def flaky_parser():
+    """Passes on even calls, fails on odd calls, so a case is stable only by luck."""
+    calls = {"n": 0}
+
+    def parse(query, genres, moods):
+        calls["n"] += 1
+        genre = "folk" if calls["n"] % 2 == 0 else "lofi"
+        return {"genre": genre, "mood": "", "energy": 0.5}, []
+
+    return parse
+
+
+def run_parser_n_times(songs, parse_fn, n):
+    cases = [{"query": "relaxing acoustic folk", "tier": "easy", "expected": {"genre": "folk"}}]
+    return [([], evaluate_parser(cases, songs, parse_fn)) for _ in range(n)]
+
+
+def test_aggregate_runs_counts_passes_per_case(songs):
+    agg = aggregate_runs(run_parser_n_times(songs, flaky_parser(), 4))
+    [case] = agg["cases"]
+    assert (case["passes"], case["runs"], case["kind"]) == (2, 4, "parser")
+    assert len(agg["summaries"]) == 4
+
+
+def test_aggregate_runs_includes_query_ranking_cases_but_not_profile_cases(golden, songs):
+    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
+    agg = aggregate_runs([(ranking, [])])
+    names = {c["name"] for c in agg["cases"]}
+    assert "Query: fall asleep" in names
+    assert "Starter lofi" not in names
+    assert all(c["kind"] == "ranking query" for c in agg["cases"])
+
+
+def test_multi_run_report_flags_unstable_cases_and_shows_ranges(songs):
+    runs = run_parser_n_times(songs, flaky_parser(), 4)
+    report = format_multi_run_report(runs, True, songs, label="gemini parser")
+    assert "# Evaluation report (gemini parser, 4 runs)" in report
+    assert "2/4 (unstable)" in report
+    assert "Unstable between runs: relaxing acoustic folk" in report
+    assert "0% to 100%" in report  # easy-parser accuracy swung between 0% and 100%
+
+
+def test_multi_run_report_warns_about_a_small_number_of_runs(songs):
+    report = format_multi_run_report(run_parser_n_times(songs, flaky_parser(), 3), True, songs)
+    assert "Only 3 runs" in report
+
+
+def test_multi_run_report_counts_fallbacks_across_all_runs(songs):
+    def fell_back(query, genres, moods):
+        return {"genre": "folk", "mood": "", "energy": 0.5}, [FALLBACK_NOTE_PREFIX + " (test)"]
+
+    report = format_multi_run_report(run_parser_n_times(songs, fell_back, 3), True, songs)
+    assert "| Answers that fell back to keywords | 3/3 |" in report
+    assert "came from the keyword fallback" in report
+
+
+def test_stable_deterministic_parser_shows_no_spread(songs):
+    runs = run_parser_n_times(songs, lambda q, g, m: ({"genre": "folk", "mood": "", "energy": 0.5}, []), 5)
+    report = format_multi_run_report(runs, True, songs)
+    assert "(unstable)" not in report
+    assert "Unstable between runs" not in report
+    assert "Only 5 runs" not in report
+
+
+def test_main_runs_option_writes_a_multi_run_report(tmp_path):
+    out = tmp_path / "multi.md"
+    assert main(["--runs", "3", "--out", str(out)]) == 0
+    text = out.read_text(encoding="utf-8")
+    assert "(baseline, 3 runs)" in text
+    assert "## Case stability" in text
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", str(MAX_RUNS + 1)])
+def test_main_rejects_run_counts_outside_the_allowed_range(bad):
+    with pytest.raises(SystemExit):
+        main(["--runs", bad])

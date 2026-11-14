@@ -1,6 +1,6 @@
 """Keyword-based query parser: the offline fallback for free-text requests.
 
-This is the fallback for the planned Claude-powered parser. It turns text like
+This is the fallback for the Gemini-powered parser. It turns text like
 "something mellow and acoustic to study to" into the same profile dict the scorer
 expects. It only ever returns genres and moods that exist in the catalog.
 """
@@ -131,12 +131,12 @@ def parse_query(
 
 
 def get_parse_fn(name: str):
-    """Return the parser function for 'keyword' (offline) or 'claude' (live API, falls back)."""
+    """Return the parser function for 'keyword' (offline) or 'gemini' (live API, falls back)."""
     if name == "keyword":
         return parse_query
-    if name == "claude":
-        # Imported lazily: it needs the anthropic package and itself imports this module.
-        from src.claude_parser import make_claude_parser
+    if name == "gemini":
+        # Imported lazily: it needs the google-genai package and itself imports this module.
+        from src.gemini_parser import make_gemini_parser
 
-        return make_claude_parser()
-    raise ValueError(f"unknown parser {name!r}; expected 'keyword' or 'claude'")
+        return make_gemini_parser()
+    raise ValueError(f"unknown parser {name!r}; expected 'keyword' or 'gemini'")

@@ -85,8 +85,8 @@ def main() -> None:
         help='free-text request, e.g. "something mellow and acoustic to study to"',
     )
     arg_parser.add_argument(
-        "--parser", choices=["keyword", "claude"], default="keyword",
-        help="how --query is parsed; 'claude' calls the API and falls back to keywords on failure",
+        "--parser", choices=["keyword", "gemini"], default="keyword",
+        help="how --query is parsed; 'gemini' calls the API and falls back to keywords on failure",
     )
     args = arg_parser.parse_args()
 
