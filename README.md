@@ -1,6 +1,6 @@
 # 🎵 Music Recommender, Extended with RAG and a Reliability System
 
-> **DRAFT.** This README describes the planned system. Sections marked **(planned)** describe features that are designed but not yet implemented. Update or remove those markers as each feature lands.
+> **Status.** Everything described here is implemented and tested offline. Live Gemini results come from earlier runs, and the final live run could not finish because the free-tier daily quota ran out. The Testing Summary says exactly which numbers were measured when, and on which version of the test set.
 
 ## Original Project: Music Recommender Simulation
 
@@ -10,28 +10,29 @@ This project extends **Music Recommender Simulation**, a small CLI-first content
 
 **Music Recommender: Retrieval-Augmented Edition**
 
-This project lets a listener ask for music in plain language ("something calm and acoustic for a rainy study session") and get ranked, explained recommendations. Two additions make that possible: a **Gemini-powered query parser** that turns free text into a structured taste profile, and a **local embedding retriever** that finds candidate songs by meaning instead of exact label matches. A **reliability system** (guardrails, unit tests, and an evaluation harness) measures whether those additions improve on the original recommender.
+This project lets a listener ask for music in plain language ("something calm and acoustic for a rainy study session") and get ranked, explained recommendations. Three additions make that possible: a **Gemini-powered query parser** that turns free text into a structured taste profile, an **embedding retriever** that finds candidate songs by meaning instead of exact label matches, and a **confidence score** that says how much to trust each result. A **reliability system** (guardrails, automated tests, an evaluation harness with robustness checks, an ablation study, and a feedback log) measures whether those additions improve on the original recommender.
 
 It matters because the original had a documented weakness: exact-match labels gave `chill` and `relaxed` no credit for each other, and users had to speak the system's vocabulary. This version fixes that while keeping the ranking deterministic and every recommendation explainable. It also treats evaluation as a core feature rather than an afterthought.
 
 ## Architecture Overview
 
-The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In short, data moves through five stages:
+The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). Data moves through six stages:
 
-1. **Input and guardrails (implemented).** The user's request is cleaned before anything else happens: energy is clamped to 0-1, casing and whitespace are normalized, and unknown labels are flagged.
-2. **Query parser (implemented; measured live, see Testing Summary).** `src/gemini_parser.py` sends the request to a Gemini Flash-Lite model (default `gemini-3.5-flash-lite`, override with the `GEMINI_MODEL` environment variable) with a JSON schema and converts the answer into a `UserProfile` (genre, mood, target energy, likes acoustic). Everything Gemini returns is validated against the catalog, so an invented genre or mood is discarded. If there are no credentials, the call fails, the response is incomplete, empty or off-schema, the keyword parser in `src/parser.py` takes over so the project still runs offline, and the fallback is noted in the output.
-3. **Retriever (planned).** Local embeddings over song descriptions pull candidate songs by meaning. This is the RAG step: the system looks up information before answering.
-4. **Core recommender (existing).** `score_song()` and `recommend_songs()` rank the candidates and produce a reason for each score. Ranking stays deterministic and is never delegated to the LLM.
-5. **Output.** The top-k list with scores and reasons.
+1. **Input and guardrails.** The request is cleaned first: energy is clamped to 0-1, casing and whitespace are normalized, and unknown labels are flagged.
+2. **Query parser.** `src/gemini_parser.py` sends the request to a Gemini Flash-Lite model (default `gemini-3.5-flash-lite`, override with `GEMINI_MODEL`) with a JSON schema and converts the answer into a profile (genre, mood, target energy, likes acoustic, plus the model's own certainty). Everything Gemini returns is validated against the catalog, so an invented genre or mood is discarded. If there are no credentials, the call fails or times out, or the response is incomplete or off-schema, the keyword parser in `src/parser.py` takes over and the output says why.
+3. **Retriever (the RAG step).** `src/retrieval.py` embeds each song's description once (Gemini `gemini-embedding-001`, cached in `cache/`, or a local TF-IDF alternative) and finds the 20 songs closest in meaning to the raw request. The candidates are printed so a person can check them.
+4. **Core recommender.** `score_song()` and `recommend_songs()` rank only those candidates and explain every point awarded. Ranking is deterministic and never delegated to an LLM.
+5. **Confidence.** `src/confidence.py` combines how much of the request was understood with how well the best song fits it, and lists the reasons when it is not high.
+6. **Output and log.** The top-k list with scores, reasons and confidence. Each `--query` run is logged so a person can rate it.
 
-**Testing and human checks.** Unit tests (pytest) cover the deterministic parts and mock the Gemini parser. An evaluation harness runs the standard and adversarial profiles through the full pipeline, compares results to a golden set and to the non-RAG baseline, and writes a report. Humans stay in the loop at three points: reviewing the parsed profile and retrieved candidates, reading the recommendations and explanations, and reviewing the eval report before any weight or golden-set changes.
+**Testing and human checks.** 382 pytest tests cover the deterministic parts and replace Gemini with a fake client. An evaluation harness scores ranking and parsing against a golden set, repeats runs to show the variance of the non-deterministic parser, and checks whether the confidence score means anything. Humans stay in the loop at three points: reviewing the retrieved candidates, rating results with `python -m src.feedback`, and reviewing reports before any weight or golden-set change.
 
 ## Setup Instructions
 
 1. **Clone the repository and enter it.**
 
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/SLyubar/applied-ai-system-project
    cd applied-ai-system-final
    ```
 
@@ -49,43 +50,61 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). In 
    pip install -r requirements.txt
    ```
 
-4. **(Optional) Set your Gemini API key** to use the Gemini parser (`--parser gemini`). Without a key the app falls back to the keyword parser and says so. Create a key in Google AI Studio. Live runs make real API calls to a Gemini model; check your plan's quota and pricing.
+4. **(Optional) Set your Gemini API key** to use the Gemini parser and Gemini embeddings. Without a key the app falls back to the keyword parser and TF-IDF retrieval and says so. Create a key in Google AI Studio.
 
    ```bash
    export GEMINI_API_KEY="your-key-here"        # Mac or Linux
    $env:GEMINI_API_KEY = "your-key-here"        # Windows PowerShell
    ```
 
+   Live calls count against your plan. When this was written the free tier allowed 500 requests per model per day and 100 embedding requests per minute, and the daily limit is shared with every other run that day. Evaluation runs print how many calls they are about to make.
+
 5. **Run the app.** With no arguments it runs the ten built-in profiles. Pass `--query` for a free-text request.
 
    ```bash
    python -m src.main
    python -m src.main --query "something mellow and acoustic to study to"
-   python -m src.main --query "music to fall asleep to" --parser gemini
+   python -m src.main --query "slow dance at a wedding" --parser gemini --retriever gemini
    ```
+
+   `--retriever tfidf|gemini` retrieves candidates by description before scoring (`--pool N` sets how many). `--no-log` skips the interaction log.
 
 6. **Run the tests.**
 
    ```bash
    python -m pytest
+   python -m pytest --cov=src          # with coverage
    ```
 
-7. **Run the evaluation harness.** It scores the pipeline against the human-judged golden set in `data/golden_set.json` and prints a report. Use `--out` to save it and `--strict` to exit non-zero on any failure.
+7. **Run the evaluation harness.** It scores the pipeline against the golden set in `data/golden_set.json` and writes a report. `--out` saves it, `--strict` exits non-zero on any failure, `--runs N` repeats it (1 to 20) and reports each metric as a mean with its range.
 
    ```bash
    python -m src.evaluation
-   python -m src.evaluation --out reports/baseline.md --label "my run"
-   python -m src.evaluation --parser gemini --out reports/gemini.md   # live API calls
-   python -m src.evaluation --parser gemini --runs 5 --out reports/gemini_5runs.md
+   python -m src.evaluation --out reports/baseline.md
+   python -m src.evaluation --parser gemini --runs 3 --out reports/gemini_3runs.md      # live calls
+   python -m src.evaluation --parser gemini --runs 3 --retriever gemini --pool 20       # live calls
    ```
 
-   With `--parser gemini` the report counts how many answers silently fell back to the keyword parser, so a missing key can't be mistaken for a Gemini result.
+   With `--parser gemini` the report counts how many answers silently fell back to the keyword parser, so a missing key or exhausted quota can't be mistaken for a Gemini result.
 
-   `--runs N` (1 to 20) repeats the whole evaluation and reports each metric as a mean with its range, plus how many runs each parser-dependent case passed. Use it for the Gemini parser, which is not deterministic. Each live run makes about 21 API calls.
+8. **Run the experiments.**
+
+   ```bash
+   python -m src.retrieval_eval --parser gemini --embedders tfidf,gemini --out reports/retrieval.md
+   python -m src.ablation --out reports/ablation.md
+   ```
+
+9. **Rate results and review them.** Every `--query` run prints an id.
+
+   ```bash
+   python -m src.feedback list
+   python -m src.feedback rate <id> good        # or bad, optionally --note "why"
+   python -m src.feedback export-candidates     # skeleton golden-set cases for runs rated bad
+   ```
 
 ## Sample Interactions
 
-All three examples below are real output from the current code. Free-text parsing in these examples uses the offline keyword parser. Live Gemini results are in the Testing Summary, and the embedding retriever is still planned.
+The examples below are real output. Examples 1 to 3 and 5 use the offline keyword parser; example 4 was captured from a live Gemini run before the confidence line was added.
 
 ### Example 1: Structured profile (works today)
 
@@ -116,7 +135,7 @@ All three examples below are real output from the current code. Free-text parsin
 3. Spacewalk Thoughts - Orbit Bloom     Score: 0.76 / 1.00
 ```
 
-The word "mellow" is not a label in the catalog. Without a parser it would score zero for mood; the keyword parser maps it to `chill`. The Gemini parser (`--parser gemini`) handles phrasings the keyword lists don't cover (see the Testing Summary), and the embedding retriever is planned.
+The word "mellow" is not a label in the catalog. Without a parser it would score zero for mood; the keyword parser maps it to `chill`. The Gemini parser (`--parser gemini`) handles phrasings the keyword lists don't cover (see the Testing Summary).
 
 ### Example 3: Messy input and the guardrails (works today)
 
@@ -136,6 +155,51 @@ The CLI now prints a warning for each fix:
 
 Energy `1.50` is likewise clamped to 1.0 with the warning `energy 1.5 is out of range and was clamped to 1.0`.
 
+### Example 4: Retrieval fixes a request the keyword parser misreads
+
+**Input:** `"slow dance at a wedding"`
+
+The keyword parser reads "dance" as high energy and recommends EDM: *Afterhours Static, Sunrise Drop, Pulse Garden*. The local TF-IDF retriever matches words, not meaning: its candidates mix the right song (*Last Call Ballad*) with *Calle Fuego*, *Noche de Salsa* and *Gym Hero*, and the misread profile still wins, so the top recommendation is a metal song, *Black Lantern Hymn*. With Gemini parsing and Gemini embeddings (live):
+
+```
+'pop' | 'romantic' | energy 0.35 | no acoustic preference
+! retrieved 20 candidates (gemini); closest: Last Call Ballad, Velvet Hours, Slow Dance Voicemail,
+  Midnight in Accra, Letters to Orchard Lane
+
+1. Paper Hearts - Maple June              Score: 0.77 / 1.00
+2. Letters to Orchard Lane - Fern & Fable Score: 0.64 / 1.00
+3. Last Call Ballad - Marlowe Quintet     Score: 0.63 / 1.00
+```
+
+### Example 5: Confidence says when not to trust a result
+
+A clear profile:
+
+```
+PROFILE: Starter lofi
+  Confidence: HIGH (0.96)  [understanding 1.00, match 0.96]  matched on: energy, mood, genre, acoustic
+```
+
+Labels the catalog has never heard of (this profile used to print a confident-looking score with no warning):
+
+```
+PROFILE: Unknown genre and mood
+'vaporwave' | 'sad' | energy 0.50 | prefers non-acoustic
+  Confidence: LOW (0.55)  [understanding 0.55, match 0.93]  matched on: energy, acoustic
+    - genre 'vaporwave' is not in the catalog
+    - mood 'sad' is not in the catalog
+  Low confidence: treat these as rough suggestions, not a good match.
+```
+
+Gibberish:
+
+```
+python -m src.main --query "asdkjh qwpoeiu zzzz"
+  Confidence: LOW (0.00)  [understanding 0.00, match 0.00]  matched on: nothing
+    - nothing in the request could be turned into a criterion
+  Low confidence: treat these as rough suggestions, not a good match.
+```
+
 ## Design Decisions
 
 - **Hybrid LLM and local retrieval.** Gemini handles the part where an LLM is clearly strongest: understanding vague language. Retrieval and ranking stay local, so they are free, offline, and reproducible. The trade-off is two moving parts instead of one.
@@ -145,63 +209,100 @@ Energy `1.50` is likewise clamped to 1.0 with the warning `energy 1.5 is out of 
 - **Evaluation is a first-class component.** Because the Gemini step is non-deterministic, the Gemini parser is mocked in unit tests and checked separately against a golden set of phrase-to-profile pairs.
 - **Expanded catalog.** The original 20 songs, mostly one per genre, were too few for retrieval or precision@k to mean much. The catalog now has 80 songs with at least 3 per genre, four new genres (afrobeats, k-pop, bossa nova, blues) to reduce the Western-music bias noted in the model card, and a `description` column for the retriever. Data-quality tests in `tests/test_catalog.py` guard it. The songs are fictional, and 80 songs is still small, so results should not be read as evidence about real-world catalogs.
 
+- **Retrieve, then score.** Retrieval picks candidates from the request's raw text; the unchanged scorer ranks them. This widens what a request can match without changing how songs are scored or explained. The trade-off, measured below, is that a pool that is too small can drop the right song, and for free-text requests retrieval alone turned out to be nearly as good as the full pipeline.
+- **Evidence over assumption for embeddings.** I built a local TF-IDF embedder and a Gemini embedder behind one interface and compared them. TF-IDF made results worse (it matches words, not meaning), so Gemini embeddings are the recommended option; TF-IDF stays as the offline fallback.
+- **Confidence is explainable, not a probability.** `min(understanding, match)`, banded high (0.8 or more), medium (0.6 or more) and low, with reasons. An LLM's self-reported certainty can only lower it, because models tend to overstate how sure they are. Whether the score separates good results from bad is measured, not assumed (see calibration).
+- **Fail fast, and say why.** A used-up daily quota once looked like a hang because the SDK retried for hours. Only transient server errors are retried now, every call has a timeout, and any failure falls back with the reason in the output.
+- **No automatic learning from feedback.** Ratings are logged and bad ones export as skeleton test cases, but a person must fill in the right answers. Nothing changes the golden set or the weights on its own.
+
 ## Testing Summary
 
-**What has been tested so far (original system).** Ten hand-written profiles (three standard, seven adversarial) were run through the scorer and the output was read by hand. On the original 20-song catalog, a mood-ablation experiment, where mood was commented out of the score, changed the recommendations for only four of the ten profiles. (This has not been re-run on the 80-song catalog.) This showed that mood is a weak signal and that energy and genre dominate the ranking.
+**In short.** 382 automated tests pass (99% line coverage). Against a hand-built golden set of 32 ranking cases and 15 parser phrases, the keyword baseline passes 21/32 ranking cases and 11/15 phrases, and fails every non-English request. In live runs on an earlier version of the golden set, the Gemini parser got 14.2 of 15 phrases right (range 13 to 15 over 5 runs) and passed 12 of 12 adversarial cases in all 3 runs, including both prompt injections and four non-English requests. Gemini-embedding retrieval raised free-text nDCG from 0.65 to 0.69-0.73, while TF-IDF retrieval lowered it to 0.54. The system struggled when a phrase stated no energy, and with vague or figurative requests. The confidence score reliably flags unknown labels and gibberish, but it cannot see a confident misreading. The final live run on the finished code could not complete because the free-tier daily quota ran out.
 
-**What worked.** The scorer is deterministic and every result comes with a reason, which made failures easy to spot. The adversarial profiles exposed real limitations.
+### How reliability is measured
 
-**What didn't.**
-- A trailing space in a profile label silently broke the genre match (see Example 3).
-- Out-of-range energy (1.5) was accepted without complaint.
-- Unknown genres and moods fell back to energy-only ranking with no warning.
-- Review was manual, so nothing would catch a regression if the weights changed.
-
-**Baseline evaluation (implemented).** `python -m src.evaluation` runs 22 ranking cases (16 profiles and 6 free-text queries parsed end to end) and 15 parser cases from a human-judged golden set. Each ranking case grades songs as *ideal* or *acceptable* and lists *forbidden* songs that must not appear in the top 5. A case passes only if the top result is relevant, no forbidden song appears, and an ideal song is in the top 3. I fixed these criteria before looking at results. The saved baseline is in [reports/baseline.md](reports/baseline.md):
-
-| Metric | Baseline |
+| Method | What it covers |
 |---|---|
-| Mean precision@5 | 0.73 |
-| Mean nDCG@5 | 0.74 |
-| Top-1 result relevant | 85% |
-| Ranking cases passed | 19/22 |
-| Forbidden songs recommended | 0 |
-| Parser accuracy, easy phrasings | 10/10 |
-| Parser accuracy, hard phrasings | 1/5 |
-| Repeat runs identical (profile cases) | yes |
+| Automated tests | 382 pytest tests for guardrails, scoring, both parsers, the retriever, confidence, the CLI, the feedback log, and the evaluation code itself. Gemini is replaced by a fake client, including the real error classes it raises. A GitHub Actions workflow runs them (not yet exercised, since it needs a push). |
+| Evaluation harness | Ranking cases with graded relevance (ideal and acceptable songs) and forbidden songs; a case passes only if the top result is relevant, nothing forbidden appears, and an ideal song is in the top 3. Criteria were fixed before looking at results. Parser phrases, repeated runs with mean and range, and fallback detection so a keyword answer can't pass as a Gemini one. |
+| Robustness checks | 6 paraphrase groups (every wording must meet the expectation and agree on energy) and 12 adversarial cases (injection, other languages, gibberish, off-topic, very long input). |
+| Ablation | Drops or nudges each scoring weight and re-scores the profile cases. |
+| Confidence scoring | Per result, with a calibration table in every report. |
+| Logging and error handling | Every failure path falls back and records why, for example `RateLimitError 429: ... 500 requests per day`. `--query` runs are logged with their profile, notes, results and confidence. |
+| Human evaluation | `python -m src.feedback` records good or bad ratings. **No ratings have been collected yet**, so this method is built but unused. |
 
-**An earlier, looser golden set hid the weaknesses.** My first version used one flat list of "relevant" songs per case and scored 100% top-1 on 8 scored cases. Grading relevance, adding forbidden songs, and adding end-to-end queries lowered the top-1 rate to 85% without changing the system at all, so the earlier number was measuring how generous my judgments were.
+### Results
 
-What this tells me: all 16 profile cases pass, so the scorer is doing its job when it gets a well-formed profile. All 3 failures are free-text queries the keyword parser misunderstands: "music to fall asleep to" (it only knows "sleep"), "songs that feel like a warm hug" (no cue words at all, so it falls back to a mid-energy default and recommends unrelated songs), and "something happy and danceable" (an ideal song misses the top 3). Those are the cases the Gemini parser should win, and the same golden set will measure whether it does. The ranking numbers on profile cases are already high, so I don't expect the embedding retriever to move them much. If it doesn't, that is a result worth reporting honestly.
+**Keyword baseline, current golden set** ([reports/baseline.md](reports/baseline.md)):
 
-Caveats: the golden set is still small (22 ranking and 15 parser cases), and I drafted all the judgments myself, so they reflect my taste. One judgment is arguable: "Sunday Brunch Swing" (a lively happy swing tune) is the keyword baseline's top answer to "something happy and danceable" and could reasonably count as acceptable. I left it out rather than adjust the golden set after seeing results. The 135 pytest tests also guard the metrics, the golden-set format and the baseline.
+| Metric | Value |
+|---|---|
+| Ranking cases passed | 21/32 |
+| Top-1 result relevant | 73% |
+| Mean nDCG@5 | 0.61 |
+| Parser phrases passed (easy / hard) | 11/15 (100% / 20%) |
+| Paraphrase groups passed | 0/6 |
+| Adversarial cases passed | 8/12 (fails all four non-English requests) |
+| Forbidden songs recommended | 2 |
 
-**Gemini parser tests (implemented).** 30 tests use a fake client, so no network or key is needed. They check the request shape (model, JSON schema, no sampling parameters), that invented labels and out-of-range energy are cleaned up, that user text is passed as data rather than instructions, and that each failure path (API error, incomplete or empty response, output that does not match the schema, missing credentials) falls back to the keyword parser. This tests my code around Gemini, not how well Gemini understands music requests.
+All 16 profile cases pass, so the scorer works when it gets a well-formed profile. The failures are free-text requests the keyword parser misreads, for example "dance" in "slow dance at a wedding" read as high energy.
 
-**Gemini evaluation (live, one run).** `python -m src.evaluation --parser gemini` against `gemini-3.5-flash-lite`, with 0 of 21 answers falling back to the keyword parser. Saved in [reports/gemini.md](reports/gemini.md).
+**Gemini parser, live** ([5 runs](reports/gemini_5runs.md) and [3 runs with robustness](reports/gemini_full_3runs.md)). These ran on an earlier, smaller golden set (22 ranking cases, before the 10 extra free-text cases and the confidence code), with 0 answers falling back to the keyword parser:
 
-| Metric | Keyword baseline | Gemini parser |
+| | Keyword baseline (same set) | Gemini, 5 runs: mean (min to max) |
 |---|---|---|
-| Ranking cases passed | 19/22 | 21/22 |
-| Top-1 result relevant | 85% | 100% |
-| Mean nDCG@5 | 0.74 | 0.85 |
-| Mean precision@5 | 0.73 | 0.84 |
-| Parser accuracy, easy phrasings | 10/10 | 9/10 |
-| Parser accuracy, hard phrasings | 1/5 | 5/5 |
-| Forbidden songs recommended | 0 | 0 |
+| Ranking cases passed (of 22) | 19 | 21.2 (21 to 22) |
+| Mean nDCG@5 | 0.74 | 0.84 (0.81 to 0.85) |
+| Parser phrases passed (of 15) | 11 | 14.2 (13 to 15) |
+| Hard phrasings | 20% | 96% (80% to 100%) |
+| Easy phrasings | 100% | 94% |
+| Adversarial cases passed | 8/12 | 12/12 in all 3 runs |
+| Paraphrase groups passed | 0/6 | 5/6 |
 
-The hard free-text phrasings the keyword parser missed ("music to fall asleep to", "background music while I work", "something happy and danceable") now parse correctly, and the end-to-end ranking improves with them. The profile cases don't use the parser, so they are unchanged.
+Even Gemini's worst run beat the baseline. Two findings:
+- **The "Sad" paraphrase group failed (0 of 3 runs), but Gemini was not wrong.** It gave mood `melancholy` for all four wordings. "I feel sad tonight" and "something melancholy" state no energy, so they got the default 0.5, while my expectation required 0.45 or lower. That is a weak expectation on my part, and I left it unchanged because adjusting it after seeing results would be tuning.
+- **The study phrase is unstable.** "Something mellow and acoustic to study to" passed only 2 of 5 runs, because Gemini sometimes returns no genre. The golden set expects `lofi`, which reflects my judgment that studying implies lofi.
 
-Read these numbers with care:
-- **One run is a noisy measurement.** Gemini is not deterministic. For "something mellow and acoustic to study to", three repeat calls returned genre `lofi` once and an empty genre twice. That phrase is the one easy case Gemini failed (the keyword parser passes it because I hard-coded "study" as a lofi cue, and the golden set expects `lofi`, so both reflect my judgment that studying implies lofi). The 14/15 vs 11/15 parser gap is three phrases, so it could shrink or grow on another run. Repeated runs are needed before claiming a precise improvement.
-- **The golden set is small and mine.** Its judgments, including the arguable ones noted above, shaped both the baseline and these results.
-- **The remaining ranking failure** is "songs that feel like a warm hug": Gemini parsed it sensibly, but an ideal song did not reach the top 3 (it returned relaxed, acoustic songs such as Coffee Shop Stories that I graded only as acceptable).
+**Retrieval experiment** ([reports/retrieval.md](reports/retrieval.md)): Gemini parser, 16 free-text cases, every configuration reusing the same parsed profile for each query.
 
-**Still to do.** Run `python -m src.evaluation --parser gemini --runs 5` to measure run-to-run variance, then decide whether the embedding retriever is worth adding. The ranking numbers on profile cases are already high, so I expect little from it, and that would be worth reporting honestly.
+| Configuration | Cases passed | nDCG@5 |
+|---|---|---|
+| No retrieval | 11/16 | 0.65 |
+| TF-IDF, retrieve 20 then score | 8/16 | 0.54 |
+| Gemini embeddings, retrieve 10 then score | 13/16 | 0.73 |
+| Gemini embeddings, retrieve 20 then score | 14/16 | 0.69 |
+| Gemini embeddings, retrieve 40 then score | 12/16 | 0.68 |
+| Gemini embeddings, retrieval only (no scorer) | 15/16 | 0.70 |
 
-**What I learned so far.** Hand-reading output doesn't scale, and the failures worth catching are the quiet ones: results that look plausible but are wrong. That is the main reason the testing system is part of the plan.
+Gemini embeddings help; TF-IDF hurts. The surprise is that retrieval alone passes the most cases, so for free-text requests the scorer adds little. The pool-size differences are within noise. I wrote both the song descriptions and the test queries, so their vocabulary overlaps in a way that favors retrieval, and 16 cases is a small sample.
 
-> Fill in the real pass/fail counts and metrics here after the harness runs.
+**Ablation** ([reports/ablation.md](reports/ablation.md)): dropping genre hurts most (nDCG 0.87 to 0.69), dropping mood least (to 0.83). The weights I chose are not the best on my own golden set (halving mood scores 0.95, equal weights 0.91), but tuning them to judgments I wrote myself would be overfitting, so I did not change them.
+
+**Confidence calibration** (keyword parser, current golden set; every report has this table):
+
+| Confidence | Cases | Passed | Pass rate |
+|---|---|---|---|
+| high | 22 | 15 | 68% |
+| medium | 4 | 4 | 100% |
+| low | 4 | 0 | 0% |
+
+Every low-confidence case failed, so a low rating is a reliable warning. A high rating is not a guarantee: the parser's understanding score was 1.00 on phrases it got right but 0.25 on ones it got wrong, yet it still rates a confident misreading like "slow dance" as EDM highly. Gemini's self-reported certainty is meant to catch that, but **that has not been measured live yet.**
+
+### What worked, what didn't, what I learned
+
+- **A looser golden set hid the weaknesses.** My first version scored 100% top-1 on the profile cases. With graded relevance and forbidden songs the same system scored 85%, and 73% once the harder free-text cases were added. The system never changed; the tests got honest.
+- **Testing found real bugs in my own work.** A loophole where a default energy of 0.5 satisfied "calm" expectations; Gemini's Interactions API raising a different error family than the parser caught (a timeout would have crashed it, and my tests used the wrong class so they never noticed); and a daily quota that the SDK silently retried for hours, which looked like a hang.
+- **The LLM helped most where it was supposed to**, on vague phrasing and other languages, and did not break on injection. It is not deterministic, so one run is not a measurement.
+- **TF-IDF retrieval was a bad idea that only measuring revealed.**
+
+### Known gaps
+
+- **The final live run is missing.** The free tier's daily limit for `gemini-3.5-flash-lite` (500 requests) was used up, and the API said to retry in about 15 hours. Not yet measured live on the finished code: Gemini with the 10 extra free-text cases, Gemini's self-reported confidence and its calibration, and the end-to-end pipeline with Gemini retrieval over several runs. The commands are in Setup, steps 7 and 8; they need about 200 calls per 3 runs.
+- **One author.** I drafted every golden-set judgment and the descriptions, so results reflect one person's taste; there is no second reviewer, and no human ratings have been collected.
+- **Small samples.** 32 ranking cases, 15 parser phrases, 16 free-text retrieval cases.
+- **Confidence cannot see a confident mistake**, as shown above.
+- **The GitHub Actions workflow has not run**, and cost is not tracked (only wall time).
+- **The catalog is 80 fictional songs.** Nothing here says how this would behave on a real catalog.
 
 ## Reflection
 
@@ -214,6 +315,11 @@ The original project taught me that a recommender is a set of design choices: wh
 - [diagrams/architecture.md](diagrams/architecture.md): system architecture diagram
 - [model_card.md](model_card.md): model card for the original recommender
 - [ai_interactions.md](ai_interactions.md): log of AI interactions
-- `src/`: recommender code
-- `data/songs.csv`: song catalog
+- `app.py`: Streamlit interface (`src/pipeline.py` is its query flow, `src/golden_writer.py` saves feedback to the golden set)
+- `src/recommender.py`, `src/guardrails.py`, `src/parser.py`: scoring, input cleaning, keyword parser
+- `src/gemini_parser.py`, `src/retrieval.py`, `src/confidence.py`: Gemini parser, embedding retriever, confidence scoring
+- `src/evaluation.py`, `src/robustness.py`, `src/ablation.py`, `src/retrieval_eval.py`: evaluation harness and experiments
+- `src/feedback.py`, `src/main.py`: interaction log and ratings, command line runner
+- `data/songs.csv`, `data/golden_set.json`: song catalog, human-judged test set
+- `reports/`: saved evaluation reports (each states which version of the code and test set produced it)
 - `tests/`: pytest tests

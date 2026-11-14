@@ -8,14 +8,14 @@ flowchart TD
     subgraph INPUT["1. Input"]
         U["User<br/>free-text request or structured profile"]
         CSV[("data/songs.csv<br/>20 songs")]
-        KB[("Song descriptions / tags<br/>retrieval index")]
+        KB[("Song descriptions<br/>embedded once, cached in cache/")]
     end
 
     %% ---------- RAG ----------
     subgraph RAG["2. Retrieval (NEW - RAG)"]
         QP["Query Parser - Gemini API<br/>text to UserProfile<br/>validated against known labels<br/>fallback: keyword parser if no key or API error"]
-        RET["Retriever - local embeddings<br/>over song descriptions<br/>deterministic, offline, free"]
-        CAND["Candidate Songs<br/>top N from index"]
+        RET["Retriever<br/>Gemini embeddings (semantic)<br/>or local TF-IDF (offline, word match)<br/>searches descriptions by the raw query"]
+        CAND["Candidate Songs<br/>top 20 by default<br/>shown to the user for review"]
     end
 
     %% ---------- CORE ----------
@@ -34,11 +34,13 @@ flowchart TD
     %% ---------- RELIABILITY ----------
     subgraph REL["5. Reliability and Testing (NEW)"]
         GUARD["Input Guardrails<br/>clamp energy 0-1<br/>normalize case and whitespace<br/>flag unknown labels"]
-        UNIT["Unit Tests - pytest<br/>score bounds 0 to 1<br/>deterministic ranking<br/>Gemini parser mocked"]
-        EVAL["Evaluation Harness<br/>10 standard + adversarial profiles<br/>precision@k, consistency,<br/>mood-ablation, RAG vs baseline"]
-        GOLD[("Golden Set<br/>expected top songs per profile<br/>+ phrase to profile pairs<br/>for the parser")]
-        REPORT["Eval Report<br/>pass/fail + metrics"]
-        LOG[("Interaction Log<br/>ai_interactions.md")]
+        UNIT["Unit Tests - pytest + CI<br/>264 tests, 99 percent coverage<br/>Gemini parser mocked"]
+        EVAL["Evaluation Harness<br/>22 ranking + 15 parser cases<br/>precision, nDCG, forbidden songs<br/>repeated runs with mean and range"]
+        ROB["Robustness Checks<br/>paraphrase consistency<br/>injection, non-English,<br/>gibberish, long input"]
+        ABL["Ablation Study<br/>drop or nudge each weight"]
+        GOLD[("Golden Set<br/>graded ideal and acceptable songs<br/>forbidden songs, paraphrase groups,<br/>adversarial cases")]
+        REPORT["Eval Reports<br/>reports/*.md"]
+        LOG[("Interaction Log and ratings<br/>logs/interactions.jsonl")]
     end
 
     %% ---------- HUMAN ----------
@@ -54,7 +56,7 @@ flowchart TD
     CSV --> LOAD
     CSV --> KB
     KB --> RET
-    QP --> RET
+    GUARD -. "raw query text" .-> RET
     RET --> CAND
     QP -. "structured profile" .-> SCORE
     CAND --> SCORE
@@ -70,6 +72,12 @@ flowchart TD
     EVAL -. "runs profiles through" .-> GUARD
     OUT -. "captured results" .-> EVAL
     EVAL --> REPORT
+    GOLD --> ROB
+    ROB -. "parses queries" .-> QP
+    ROB --> REPORT
+    GOLD --> ABL
+    ABL -. "re-scores with other weights" .-> SCORE
+    ABL --> REPORT
     OUT --> LOG
 
     %% ---------- HUMAN CHECKPOINTS ----------
@@ -81,6 +89,7 @@ flowchart TD
     REPORT --> H3
     H3 -. "update weights and golden set" .-> SCORE
     H3 -. "update golden set" .-> GOLD
+    LOG -. "bad ratings export as candidate cases" .-> H3
 
     %% ---------- STYLES ----------
     classDef existing fill:#e5e7eb,stroke:#6b7280,color:#111827
@@ -91,7 +100,7 @@ flowchart TD
 
     class LOAD,SCORE,RANK,EXPL,OUT,U existing
     class QP,RET,CAND rag
-    class GUARD,UNIT,EVAL,REPORT rel
+    class GUARD,UNIT,EVAL,ROB,ABL,REPORT rel
     class H1,H2,H3 human
     class CSV,KB,GOLD,LOG data
 ```
@@ -100,15 +109,16 @@ flowchart TD
 
 **Data flow (input, process, output)**
 1. The user's request passes through the input guardrails, which clamp and normalize it.
-2. The Gemini-powered query parser turns the request into a `UserProfile`, checked against the known genre and mood labels. If there is no API key or the call fails, a keyword parser takes over. The local embedding retriever then uses the profile and the song index to pull candidate songs, matching on meaning rather than exact labels.
-3. The existing `score_song()` and `recommend_songs()` rank the candidates. Scoring stays deterministic and explainable.
-4. The output is the top-k list with a reason for each score.
+2. Two things happen in parallel. The Gemini-powered query parser turns the request into a `UserProfile`, checked against the known genre and mood labels (a keyword parser takes over if there is no key or the call fails). Separately, the retriever embeds the raw query text and finds the 20 songs whose descriptions are closest in meaning.
+3. The existing `score_song()` and `recommend_songs()` rank only those candidates. Scoring stays deterministic and explainable. Without a query (a ready-made profile), the whole catalog is ranked.
+4. The output is the top-k list with a reason for each score, and the retrieved candidates are shown for review.
 
 **Testing**
-- **Unit tests** (pytest) cover the deterministic parts: guardrails and scoring.
-- The **evaluation harness** runs the 10 standard and adversarial profiles through the full pipeline. It compares results to a golden set and to the non-RAG baseline, then writes a report.
+- **Unit tests** (pytest, run in CI) cover guardrails, scoring, both parsers, the retriever and the evaluation code itself. The Gemini calls are faked, so no key is needed.
+- The **evaluation harness** scores ranking quality against a golden set with graded relevance and forbidden songs, and repeats runs to show variance for the non-deterministic parser. The **robustness checks** test paraphrases and adversarial input, and the **ablation study** re-scores with different weights. Reports are written to `reports/`.
+- The retrieval experiment compares embedders and candidate-pool sizes on the free-text cases.
 
 **Human checkpoints**
 - **H1** checks that the parsed profile and retrieved candidates make sense before ranking, since this is where RAG can go wrong.
-- **H2** is the user or developer reading the recommendations and explanations, with feedback logged.
+- **H2** is the user or developer reading the recommendations and explanations. `python -m src.feedback` logs a good or bad rating, and bad ratings export as skeleton golden-set cases.
 - **H3** reviews the eval report and decides on weight changes or golden-set updates. Nothing changes automatically.

@@ -9,17 +9,19 @@ import argparse
 import json
 import math
 import sys
+import time
 from typing import Callable, Dict, List, Sequence, Tuple
 
+from src.confidence import assess, calibration_table, understanding
 from src.guardrails import known_labels, sanitize_profile
 from src.parser import get_parse_fn
-from src.recommender import load_songs, recommend_songs
+from src.recommender import load_songs, recommend_songs, score_song
 
 FALLBACK_NOTE_PREFIX = "Gemini parser unavailable"  # see src/gemini_parser.py
 GOLDEN_PATH = "data/golden_set.json"
 SONGS_PATH = "data/songs.csv"
 DEFAULT_K = 5
-MAX_RUNS = 20  # each live run makes about 21 API calls; cap accidental spending
+MAX_RUNS = 20  # each live run makes dozens of API calls (see estimate_api_calls); cap accidental spending
 
 # rank_fn(raw_profile, songs, k) -> (ranked song ids, warnings)
 RankFn = Callable[[Dict, List[Dict], int], Tuple[List[int], List[str]]]
@@ -85,13 +87,16 @@ def forbidden_in_top_k(ranked: Sequence[int], forbidden: Sequence[int], k: int) 
 def check_parse(profile: Dict, expected: Dict) -> List[str]:
     """Return the names of expected fields the parsed profile got wrong.
 
-    expected may contain exact values (genre, mood, likes_acoustic) and bounds
-    (energy_min, energy_max).
+    expected may contain exact values (genre, mood, likes_acoustic), allowed sets
+    (genre_in, mood_in), and bounds (energy_min, energy_max).
     """
     failures: List[str] = []
     for key in ("genre", "mood", "likes_acoustic"):
         if key in expected and profile.get(key) != expected[key]:
             failures.append(key)
+    for key in ("genre", "mood"):
+        if f"{key}_in" in expected and profile.get(key) not in expected[f"{key}_in"]:
+            failures.append(f"{key}_in")
     if "energy_min" in expected and not profile.get("energy", 0.0) >= expected["energy_min"]:
         failures.append("energy_min")
     if "energy_max" in expected and not profile.get("energy", 1.0) <= expected["energy_max"]:
@@ -143,9 +148,11 @@ def evaluate_ranking(
     results: List[Dict] = []
     by_name: Dict[str, List[int]] = {}
 
+    songs_by_id = {song["id"]: song for song in songs}
     for case in cases:
         fell_back = False
         parse_error = None
+        notes: List[str] = []
         if "query" in case:
             try:
                 profile, notes = parse_fn(case["query"], genres, moods)
@@ -157,9 +164,21 @@ def evaluate_ranking(
 
         if profile is None:
             ranked, warnings = [], [f"query could not be parsed: {parse_error}"]
+        elif "query" in case and getattr(rank_fn, "wants_query", False):
+            # Retrieval-aware pipelines also need the original text, not just the parsed profile.
+            ranked, warnings = rank_fn(profile, songs, k, query=case["query"])
         else:
             ranked, warnings = rank_fn(profile, songs, k)
         by_name[case["name"]] = ranked
+
+        confidence = None
+        if profile is not None and ranked and ranked[0] in songs_by_id:
+            try:
+                clean, _ = sanitize_profile(profile, genres, moods)
+                top_score = score_song(clean, songs_by_id[ranked[0]])[0]
+                confidence = assess(profile, notes, genres, moods, top_score).as_dict()
+            except ValueError:
+                confidence = None  # a profile too broken to clean has no meaningful confidence
 
         grades = case_grades(case)
         has_truth = bool(grades)
@@ -173,6 +192,7 @@ def evaluate_ranking(
             "expect_warning": case.get("expect_warning", False),
             "equivalent_to": case.get("equivalent_to"),
             "forbidden_hits": forbidden_in_top_k(ranked, case.get("forbidden_ids", []), k),
+            "confidence": confidence,
         }
         if has_truth:
             result["precision"] = precision_at_k(ranked, list(grades), k)
@@ -221,10 +241,70 @@ def evaluate_parser(cases: List[Dict], songs: List[Dict], parse_fn: ParseFn) -> 
             "profile": profile,
             "failed_fields": failed,
             "passed": not failed,
+            "understanding": understanding(profile, notes, genres, moods)[0] if profile else 0.0,
             # A fallback answer must not be credited to the parser under test.
             "fell_back": any(n.startswith(FALLBACK_NOTE_PREFIX) for n in notes),
         })
     return results
+
+
+def calibration_lines(ranking_runs: List[List[Dict]], parsing_runs: List[List[Dict]]) -> List[str]:
+    """Markdown checking that the confidence score means something.
+
+    Groups the ranking cases that have ground truth by the confidence band the system
+    reported, and shows each band's pass rate. A useful score has pass rates that fall from
+    high to low. Also compares the parser's understanding score on phrases it got right and wrong.
+    """
+    rows = [
+        (r["confidence"]["label"], r["passed"])
+        for run in ranking_runs for r in run
+        if r["has_ground_truth"] and r.get("confidence")
+    ]
+    runs = len(ranking_runs)
+    lines = [
+        "",
+        "## Confidence calibration",
+        "",
+        "Does the confidence score separate good results from bad? Ranking cases with ground truth, grouped by "
+        "the confidence band the system reported" + (f", pooled over {runs} runs." if runs > 1 else "."),
+        "",
+        "| Confidence | Cases | Passed | Pass rate |",
+        "|---|---|---|---|",
+    ]
+    table = calibration_table(rows)
+    for t in table:
+        rate = f"{t['pass_rate']:.0%}" if t["pass_rate"] is not None else "n/a"
+        lines.append(f"| {t['band']} | {t['cases']} | {t['passed']} | {rate} |")
+    rates = [t["pass_rate"] for t in table if t["pass_rate"] is not None]
+    if len(rates) < 2:
+        verdict = "Too few confidence bands are populated to judge calibration."
+    elif rates[0] > rates[-1] and all(a >= b for a, b in zip(rates, rates[1:])):
+        verdict = "Pass rates fall as confidence falls, as they should."
+    else:
+        verdict = "Pass rates do not fall cleanly with confidence, so treat the score as a rough guide only."
+    lines += ["", verdict]
+
+    def mean(values: List[float]) -> float:
+        return sum(values) / len(values)
+
+    right = [p["understanding"] for run in parsing_runs for p in run if p["passed"] and "understanding" in p]
+    wrong = [p["understanding"] for run in parsing_runs for p in run if not p["passed"] and "understanding" in p]
+    if right and wrong:
+        lines.append(
+            f"Parser understanding score: mean {mean(right):.2f} on phrases it got right ({len(right)}) versus "
+            f"{mean(wrong):.2f} on phrases it got wrong ({len(wrong)})."
+        )
+    return lines
+
+
+def estimate_api_calls(golden: Dict) -> int:
+    """Parser calls one evaluation run makes: every free-text case and phrase is parsed once per run."""
+    return (
+        len(golden["parser_cases"])
+        + sum(1 for c in golden["ranking_cases"] if "query" in c)
+        + sum(len(g["queries"]) for g in golden.get("paraphrase_groups", []))
+        + len(golden.get("adversarial_cases", []))
+    )
 
 
 def is_deterministic(cases: List[Dict], songs: List[Dict], rank_fn: RankFn, k: int = DEFAULT_K) -> bool:
@@ -264,6 +344,14 @@ def summarize(ranking: List[Dict], parsing: List[Dict]) -> Dict:
         "ranking_fallbacks": sum(1 for r in ranking if r.get("fell_back")),
         "forbidden_hits": sum(len(r["forbidden_hits"]) for r in ranking),
     }
+
+
+def _latency_rows(seconds_per_run: Sequence[float]) -> List[str]:
+    """Wall-clock time per run (parser calls included). Cost is not tracked."""
+    if not seconds_per_run:
+        return []
+    mean = sum(seconds_per_run) / len(seconds_per_run)
+    return [f"| Wall time per run | {mean:.1f}s (min {min(seconds_per_run):.1f}s, max {max(seconds_per_run):.1f}s) |"]
 
 
 # ---------------------------------------------------------------- repeated runs
@@ -322,6 +410,7 @@ def format_multi_run_report(
     songs: List[Dict],
     k: int = DEFAULT_K,
     label: str = "baseline",
+    seconds_per_run: Sequence[float] = (),
 ) -> str:
     n = len(runs)
     agg = aggregate_runs(runs)
@@ -349,6 +438,7 @@ def format_multi_run_report(
     lines += [
         f"| Deterministic profile cases (repeat runs identical) | {'yes' if deterministic else 'NO'} |",
         f"| Answers that fell back to keywords | {fallbacks}/{possible} |",
+    ] + _latency_rows(seconds_per_run) + [
         "",
         "## Case stability",
         "",
@@ -364,6 +454,7 @@ def format_multi_run_report(
 
     unstable = [c["name"] for c in agg["cases"] if 0 < c["passes"] < c["runs"]]
     always_fail = [c["name"] for c in agg["cases"] if c["passes"] == 0]
+    lines += calibration_lines([r for r, _ in runs], [p for _, p in runs])
     lines += ["", "## Needs human review", "",
               "- The golden set is a set of human judgments. Check `data/golden_set.json` before trusting any number above."]
     if fallbacks:
@@ -389,6 +480,7 @@ def format_report(
     songs: List[Dict],
     k: int = DEFAULT_K,
     label: str = "baseline",
+    seconds_per_run: Sequence[float] = (),
 ) -> str:
     titles = {s["id"]: s["title"] for s in songs}
     s = summarize(ranking, parsing)
@@ -412,6 +504,7 @@ def format_report(
         f"| Forbidden songs recommended (top {k}) | {s['forbidden_hits']} |",
         f"| Answers that fell back to keywords | "
         f"{s['parser_fallbacks'] + s['ranking_fallbacks']}/{s['parser_total'] + s['ranking_query_cases']} |",
+    ] + _latency_rows(seconds_per_run) + [
         "",
         "## Ranking cases",
         "",
@@ -433,6 +526,8 @@ def format_report(
         for r in failed_ranking:
             bad = ", ".join(name for name, ok in r["checks"] if not ok)
             lines.append(f"- **{r['name']}**: {bad}")
+
+    lines += calibration_lines([ranking], [parsing])
 
     lines += ["", "## Parser cases", "", "| Query | Tier | Result | Wrong fields |", "|---|---|---|---|"]
     for p in parsing:
@@ -466,9 +561,14 @@ def main(argv: Sequence[str] = None) -> int:
     arg_parser.add_argument("--label", help="name shown in the report title")
     arg_parser.add_argument("--strict", action="store_true", help="exit 1 if any case fails")
     arg_parser.add_argument(
+        "--retriever", choices=["none", "tfidf", "gemini"], default="none",
+        help="retrieve candidate songs by description before scoring (affects free-text cases only)",
+    )
+    arg_parser.add_argument("--pool", type=int, default=20, help="candidates the retriever passes to the scorer")
+    arg_parser.add_argument(
         "--runs", type=int, default=1,
         help=f"repeat the whole evaluation N times (1 to {MAX_RUNS}) and report mean and range; "
-             "useful for a non-deterministic parser. Each live gemini run makes about 21 API calls.",
+             "useful for a non-deterministic parser. Live runs announce how many API calls they will make.",
     )
     arg_parser.add_argument(
         "--parser", choices=["keyword", "gemini"], default="keyword",
@@ -479,24 +579,55 @@ def main(argv: Sequence[str] = None) -> int:
         arg_parser.error(f"--runs must be between 1 and {MAX_RUNS}")
     if args.label is None:
         args.label = "baseline" if args.parser == "keyword" else f"{args.parser} parser"
+        if args.retriever != "none":
+            args.label += f" + {args.retriever} retrieval (pool {args.pool})"
 
     songs = load_songs(SONGS_PATH)
     golden = load_golden()
 
-    parse_fn = get_parse_fn(args.parser)
-    runs = [
-        (
-            evaluate_ranking(golden["ranking_cases"], songs, baseline_rank, args.k, parse_fn),
-            evaluate_parser(golden["parser_cases"], songs, parse_fn),
+    from src import robustness  # imported here: robustness itself imports from this module
+
+    if args.parser != "keyword":
+        per_run = estimate_api_calls(golden)
+        print(
+            f"This will make about {per_run * args.runs} {args.parser} API calls ({per_run} per run). "
+            "Free tiers have a daily request limit per model (500 when this was written), and the "
+            "limit is shared with every other run that day.",
+            file=sys.stderr, flush=True,
         )
-        for _ in range(args.runs)
-    ]
-    deterministic = is_deterministic(golden["ranking_cases"], songs, baseline_rank, args.k)
+    parse_fn = get_parse_fn(args.parser)
+    rank_fn = baseline_rank
+    if args.retriever != "none":
+        from src.retrieval import Retriever, get_embedder, make_retrieval_rank_fn
+
+        try:
+            rank_fn = make_retrieval_rank_fn(Retriever(songs, get_embedder(args.retriever)), args.pool)
+        except Exception as error:  # evaluating a retriever that cannot run would be meaningless
+            arg_parser.error(f"cannot build the {args.retriever} retriever: {type(error).__name__}: {error}")
+    runs = []
+    robustness_runs = []
+    seconds_per_run = []
+    for _ in range(args.runs):
+        started = time.perf_counter()
+        runs.append((
+            evaluate_ranking(golden["ranking_cases"], songs, rank_fn, args.k, parse_fn),
+            evaluate_parser(golden["parser_cases"], songs, parse_fn),
+        ))
+        robustness_runs.append({
+            "paraphrase": robustness.evaluate_paraphrases(golden.get("paraphrase_groups", []), songs, parse_fn),
+            "adversarial": robustness.evaluate_adversarial(golden.get("adversarial_cases", []), songs, parse_fn),
+        })
+        seconds_per_run.append(time.perf_counter() - started)
+        if args.parser != "keyword" or args.runs > 1:
+            # Progress on stderr so a slow or stalled live run is visible, not silent.
+            print(f"run {len(runs)}/{args.runs} finished in {seconds_per_run[-1]:.0f}s", file=sys.stderr, flush=True)
+    deterministic = is_deterministic(golden["ranking_cases"], songs, rank_fn, args.k)
 
     if args.runs == 1:
-        report = format_report(runs[0][0], runs[0][1], deterministic, songs, args.k, args.label)
+        report = format_report(runs[0][0], runs[0][1], deterministic, songs, args.k, args.label, seconds_per_run)
     else:
-        report = format_multi_run_report(runs, deterministic, songs, args.k, args.label)
+        report = format_multi_run_report(runs, deterministic, songs, args.k, args.label, seconds_per_run)
+    report += "\n" + robustness.format_section(robustness_runs)
     print(report)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
@@ -505,6 +636,9 @@ def main(argv: Sequence[str] = None) -> int:
     # --strict requires every run to pass everything.
     all_passed = deterministic and all(
         all(r["passed"] for r in ranking) and all(p["passed"] for p in parsing) for ranking, parsing in runs
+    ) and all(
+        all(r["passed"] for r in run["paraphrase"]) and all(r["passed"] for r in run["adversarial"])
+        for run in robustness_runs
     )
     return 0 if (all_passed or not args.strict) else 1
 

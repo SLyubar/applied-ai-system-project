@@ -81,3 +81,10 @@ def test_sanitizing_restores_the_genre_match_lost_to_whitespace():
     after = recommend_songs(clean, songs, k=1)[0][1]
     assert after == pytest.approx(0.96, abs=0.005)
     assert after > before
+
+
+def test_empty_labels_are_not_reported_as_unknown_labels():
+    """A parser that found no genre or mood returns '' and says so itself; the guardrail must not repeat it."""
+    clean, warnings = sanitize_profile({"genre": "", "mood": "", "energy": 0.5}, GENRES, MOODS)
+    assert clean["genre"] == "" and clean["mood"] == ""
+    assert warnings == []

@@ -1,6 +1,7 @@
 import pytest
 
 from src.evaluation import (
+    calibration_lines,
     MAX_RUNS,
     aggregate_runs,
     format_multi_run_report,
@@ -206,9 +207,11 @@ def test_baseline_passes_every_profile_case(golden, songs):
     assert failing == []
 
 
-def test_baseline_never_recommends_a_forbidden_song(golden, songs):
+def test_baseline_never_recommends_a_forbidden_song_for_profile_cases(golden, songs):
+    """Free-text cases are excluded: the keyword parser misreads some of them (for example
+    'dance' in 'slow dance at a wedding' as high energy), which is the headroom measured elsewhere."""
     results = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
-    assert [(r["name"], r["forbidden_hits"]) for r in results if r["forbidden_hits"]] == []
+    assert [(r["name"], r["forbidden_hits"]) for r in results if not r["is_query"] and r["forbidden_hits"]] == []
 
 
 def test_baseline_keyword_parser_fails_the_hard_queries_end_to_end(golden, songs):
@@ -430,3 +433,151 @@ def test_main_runs_option_writes_a_multi_run_report(tmp_path):
 def test_main_rejects_run_counts_outside_the_allowed_range(bad):
     with pytest.raises(SystemExit):
         main(["--runs", bad])
+
+
+# ---- latency ----
+
+def test_latency_row_is_omitted_when_no_timings_are_given(golden, songs):
+    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
+    parsing = evaluate_parser(golden["parser_cases"], songs, parse_query)
+    assert "Wall time" not in format_report(ranking, parsing, True, songs)
+
+
+def test_single_run_report_shows_wall_time(golden, songs):
+    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
+    parsing = evaluate_parser(golden["parser_cases"], songs, parse_query)
+    report = format_report(ranking, parsing, True, songs, seconds_per_run=[12.34])
+    assert "| Wall time per run | 12.3s (min 12.3s, max 12.3s) |" in report
+
+
+def test_multi_run_report_shows_mean_and_range_of_wall_time(songs):
+    runs = run_parser_n_times(songs, lambda q, g, m: ({"genre": "folk", "mood": "", "energy": 0.5}, []), 3)
+    report = format_multi_run_report(runs, True, songs, seconds_per_run=[10.0, 20.0, 30.0])
+    assert "| Wall time per run | 20.0s (min 10.0s, max 30.0s) |" in report
+
+
+# ---- confidence in the evaluation ----
+
+def test_ranking_results_record_a_confidence_for_each_scored_case(golden, songs):
+    results = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
+    for r in results:
+        assert r["confidence"] is not None
+        assert r["confidence"]["label"] in {"high", "medium", "low"}
+        assert 0.0 <= r["confidence"]["score"] <= 1.0
+
+
+def test_a_clear_profile_case_is_high_and_unknown_labels_are_low(golden, songs):
+    by_name = {r["name"]: r for r in evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)}
+    assert by_name["Starter lofi"]["confidence"]["label"] == "high"
+    assert by_name["Unknown genre and mood"]["confidence"]["label"] == "low"
+    assert by_name["No matches, no acoustic pref"]["confidence"]["label"] == "low"
+
+
+def test_query_case_confidence_comes_from_what_the_parser_understood(songs):
+    cases = [{"name": "junk", "query": "asdkjh qwpoeiu zzzz", "acceptable_ids": [1]},
+             {"name": "clear", "query": "angry metal", "acceptable_ids": [17]}]
+    by_name = {r["name"]: r for r in evaluate_ranking(cases, songs, baseline_rank)}
+    assert by_name["junk"]["confidence"]["label"] == "low"
+    assert by_name["clear"]["confidence"]["label"] == "high"
+
+
+def test_a_profile_too_broken_to_clean_has_no_confidence_instead_of_crashing(songs):
+    cases = [{"name": "broken", "profile": {}, "acceptable_ids": [1]}]
+    [result] = evaluate_ranking(cases, songs, fake_rank([1, 2]))
+    assert result["confidence"] is None
+
+
+def test_no_ranked_songs_means_no_confidence(songs):
+    cases = [{"name": "empty", "profile": {"genre": "lofi", "mood": "chill", "energy": 0.4}, "acceptable_ids": [1]}]
+    [result] = evaluate_ranking(cases, songs, fake_rank([]))
+    assert result["confidence"] is None
+
+
+def test_parser_results_record_an_understanding_score(songs):
+    cases = [{"query": "angry metal", "tier": "easy", "expected": {"genre": "metal"}},
+             {"query": "asdkjh qwpoeiu", "tier": "easy", "expected": {"genre": "metal"}}]
+    good, junk = evaluate_parser(cases, songs, parse_query)
+    assert good["understanding"] == 1.0 and junk["understanding"] == 0.0
+
+
+def test_a_parser_that_raises_gets_zero_understanding(songs):
+    def broken(query, genres, moods):
+        raise ValueError("empty")
+
+    [result] = evaluate_parser([{"query": "x", "expected": {"genre": "pop"}}], songs, broken)
+    assert result["understanding"] == 0.0
+
+
+def fake_ranking(rows):
+    """rows: (confidence label, passed) pairs as ranking results."""
+    return [{"has_ground_truth": True, "passed": passed, "confidence": {"label": label}} for label, passed in rows]
+
+
+def test_calibration_says_so_when_pass_rates_fall_with_confidence():
+    ranking = fake_ranking([("high", True)] * 4 + [("medium", True), ("medium", False), ("low", False)])
+    text = "\n".join(calibration_lines([ranking], []))
+    assert "| high | 4 | 4 | 100% |" in text
+    assert "| low | 1 | 0 | 0% |" in text
+    assert "Pass rates fall as confidence falls" in text
+
+
+def test_calibration_admits_when_the_score_is_not_separating_cases():
+    ranking = fake_ranking([("high", False), ("high", False), ("low", True)])
+    assert "do not fall cleanly" in "\n".join(calibration_lines([ranking], []))
+
+
+def test_calibration_needs_at_least_two_populated_bands_to_judge():
+    assert "Too few confidence bands" in "\n".join(calibration_lines([fake_ranking([("high", True)])], []))
+
+
+def test_calibration_ignores_cases_without_ground_truth_or_confidence():
+    ranking = fake_ranking([("high", True)]) + [
+        {"has_ground_truth": False, "passed": True, "confidence": {"label": "low"}},
+        {"has_ground_truth": True, "passed": True, "confidence": None},
+    ]
+    text = "\n".join(calibration_lines([ranking], []))
+    assert "| high | 1 | 1 | 100% |" in text and "| low | 0 | 0 | n/a |" in text
+
+
+def test_calibration_pools_runs_and_reports_parser_understanding():
+    parsing = [[{"passed": True, "understanding": 1.0}, {"passed": False, "understanding": 0.2}]] * 2
+    text = "\n".join(calibration_lines([fake_ranking([("high", True)])] * 2, parsing))
+    assert "pooled over 2 runs" in text and "| high | 2 | 2 | 100% |" in text
+    assert "mean 1.00 on phrases it got right (2) versus 0.20 on phrases it got wrong (2)" in text
+
+
+def test_both_report_formats_include_the_calibration_section(golden, songs):
+    ranking = evaluate_ranking(golden["ranking_cases"], songs, baseline_rank)
+    parsing = evaluate_parser(golden["parser_cases"], songs, parse_query)
+    assert "## Confidence calibration" in format_report(ranking, parsing, True, songs)
+    assert "## Confidence calibration" in format_multi_run_report([(ranking, parsing)] * 2, True, songs)
+
+
+# ---- API call estimate ----
+
+def test_estimate_counts_every_parser_call_in_one_run(golden):
+    from src.evaluation import estimate_api_calls
+
+    expected = (
+        len(golden["parser_cases"])
+        + sum(1 for c in golden["ranking_cases"] if "query" in c)
+        + sum(len(g["queries"]) for g in golden["paraphrase_groups"])
+        + len(golden["adversarial_cases"])
+    )
+    assert estimate_api_calls(golden) == expected > 50
+
+
+def test_estimate_copes_with_a_golden_set_without_robustness_sections():
+    from src.evaluation import estimate_api_calls
+
+    assert estimate_api_calls({"parser_cases": [1, 2], "ranking_cases": [{"query": "x"}, {"profile": {}}]}) == 3
+
+
+def test_live_runs_announce_their_call_count_but_keyword_runs_do_not(capsys, monkeypatch):
+    for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    main(["--parser", "gemini", "--runs", "2"])  # no key: every answer falls back, so no real calls
+    err = capsys.readouterr().err
+    assert "This will make about" in err and "gemini API calls" in err and "run 2/2 finished" in err
+    main([])
+    assert "This will make" not in capsys.readouterr().err

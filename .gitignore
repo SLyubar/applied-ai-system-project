@@ -13,3 +13,10 @@ venv/
 
 # Pytest cache
 .pytest_cache/
+
+# Interaction log (may contain personal search text)
+logs/
+
+# Cached embeddings (rebuilt on demand)
+cache/
+.coverage

@@ -74,9 +74,10 @@ def sanitize_profile(
     if "likes_acoustic" in prefs and prefs["likes_acoustic"] is not None:
         clean["likes_acoustic"] = _coerce_bool(prefs["likes_acoustic"])
 
-    if known_genres is not None and clean["genre"] not in set(known_genres):
+    # An empty label means "not given" (the parser already says so), not "unknown".
+    if known_genres is not None and clean["genre"] and clean["genre"] not in set(known_genres):
         warnings.append(f"genre {clean['genre']!r} is not in the catalog, so it cannot match any song")
-    if known_moods is not None and clean["mood"] not in set(known_moods):
+    if known_moods is not None and clean["mood"] and clean["mood"] not in set(known_moods):
         warnings.append(f"mood {clean['mood']!r} is not in the catalog, so it cannot match any song")
 
     return clean, warnings

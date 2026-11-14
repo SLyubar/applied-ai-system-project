@@ -1,4 +1,5 @@
 pandas
 pytest
+pytest-cov
 streamlit
 google-genai>=3.3

@@ -11,9 +11,14 @@ You will implement the functions in recommender.py:
 
 import argparse
 
+from src.confidence import assess
+from src.feedback import LOG_PATH, log_interaction
 from src.guardrails import known_labels, sanitize_profile
 from src.parser import get_parse_fn
 from src.recommender import load_songs, recommend_songs
+from src.retrieval import Retriever, get_embedder
+
+DEFAULT_POOL = 20  # candidate songs retrieved before scoring
 
 
 PROFILES = {
@@ -52,11 +57,21 @@ def describe_acoustic(user_prefs: dict) -> str:
 
 
 def print_recommendations(
-    name: str, user_prefs: dict, songs: list, k: int = 5, notes: list = None
-) -> None:
+    name: str, user_prefs: dict, songs: list, k: int = 5, notes: list = None, pool: list = None
+) -> tuple:
+    """Print the top k songs with a confidence assessment.
+
+    Returns (cleaned profile, [{id, title, score}, ...], Confidence) so callers can log the run.
+    `pool` limits ranking to a subset of `songs` (the retrieved candidates); labels are still checked
+    against the whole catalog.
+    """
     genres, moods = known_labels(songs)
+    raw_prefs = user_prefs  # the parser's own output, including its reported certainty
     user_prefs, warnings = sanitize_profile(user_prefs, genres, moods)
-    recommendations = recommend_songs(user_prefs, songs, k=k)
+    recommendations = recommend_songs(user_prefs, pool if pool is not None else songs, k=k)
+    confidence = assess(
+        raw_prefs, notes or [], genres, moods, recommendations[0][1] if recommendations else None
+    )
     divider = "-" * 60
 
     print("\n" + "=" * 60)
@@ -68,6 +83,15 @@ def print_recommendations(
     print("=" * 60)
     for message in (notes or []) + warnings:
         print(f"  ! {message}")
+    print(
+        f"  Confidence: {confidence.label.upper()} ({confidence.score:.2f})  "
+        f"[understanding {confidence.understanding:.2f}, match {confidence.match:.2f}]  "
+        f"matched on: {', '.join(confidence.criteria) or 'nothing'}"
+    )
+    for reason in confidence.reasons:
+        print(f"    - {reason}")
+    if confidence.label == "low":
+        print("  Low confidence: treat these as rough suggestions, not a good match.")
 
     for rank, (song, score, explanation) in enumerate(recommendations, start=1):
         print(f"\n{rank}. {song['title']} - {song['artist']}")
@@ -77,8 +101,14 @@ def print_recommendations(
             print(f"     * {reason}")
         print(divider)
 
+    return (
+        user_prefs,
+        [{"id": song["id"], "title": song["title"], "score": score} for song, score, _ in recommendations],
+        confidence,
+    )
 
-def main() -> None:
+
+def main(argv=None) -> None:
     arg_parser = argparse.ArgumentParser(description="Music Recommender")
     arg_parser.add_argument(
         "--query",
@@ -88,14 +118,51 @@ def main() -> None:
         "--parser", choices=["keyword", "gemini"], default="keyword",
         help="how --query is parsed; 'gemini' calls the API and falls back to keywords on failure",
     )
-    args = arg_parser.parse_args()
+    arg_parser.add_argument(
+        "--retriever", choices=["none", "tfidf", "gemini"], default="none",
+        help="retrieve candidate songs by description before scoring; 'gemini' uses embeddings (live API, cached)",
+    )
+    arg_parser.add_argument(
+        "--pool", type=int, default=DEFAULT_POOL,
+        help="how many candidates the retriever passes to the scorer (default: %(default)s)",
+    )
+    arg_parser.add_argument("--no-log", action="store_true", help="do not record this --query run in the interaction log")
+    arg_parser.add_argument("--log-file", default=LOG_PATH, help="where --query runs are logged (default: %(default)s)")
+    args = arg_parser.parse_args(argv)
 
     songs = load_songs("data/songs.csv")
 
     if args.query:
         genres, moods = known_labels(songs)
         user_prefs, notes = get_parse_fn(args.parser)(args.query, genres, moods)
-        print_recommendations(f"Query: {args.query}", user_prefs, songs, notes=notes)
+        pool = None
+        retriever_used = "none"
+        if args.retriever != "none":
+            try:
+                retriever = Retriever(songs, get_embedder(args.retriever))
+                found = retriever.search(args.query, max(args.pool, 5))
+                keep = {song_id for song_id, _ in found}
+                pool = [s for s in songs if s["id"] in keep]
+                retriever_used = args.retriever
+                titles = {s["id"]: s["title"] for s in songs}
+                notes = list(notes) + [
+                    f"retrieved {len(pool)} candidates ({args.retriever}); closest: "
+                    + ", ".join(titles[song_id] for song_id, _ in found[:5])
+                ]
+            except Exception as error:  # no key, quota or network: say so and rank the whole catalog
+                notes = list(notes) + [
+                    f"retrieval unavailable ({type(error).__name__}: {' '.join(str(error).split())[:100]}); "
+                    "ranked the whole catalog"
+                ]
+        clean_prefs, recommendations, confidence = print_recommendations(
+            f"Query: {args.query}", user_prefs, songs, notes=notes, pool=pool
+        )
+        if not args.no_log:
+            interaction_id = log_interaction(
+                args.query, args.parser, clean_prefs, notes, recommendations, args.log_file, retriever_used,
+                confidence.as_dict(),
+            )
+            print(f"\nLogged as {interaction_id}. Rate it with:  python -m src.feedback rate {interaction_id} good|bad")
         return
 
     for name, user_prefs in PROFILES.items():

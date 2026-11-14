@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements.txt
+      # The tests use a fake Gemini client, so no API key is needed or provided here.
+      # The live evaluation (python -m src.evaluation --parser gemini) is run by hand.
+      - run: python -m pytest --cov=src --cov-fail-under=95
