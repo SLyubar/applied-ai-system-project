@@ -14,7 +14,9 @@ Model: defaults to MODEL below; override with the GEMINI_MODEL environment varia
 """
 
 import os
-from typing import Dict, Iterable, List, Optional, Tuple
+import re
+import time
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -38,6 +40,54 @@ from src.parser import DEFAULT_ENERGY, parse_query
 # Model names change; set GEMINI_MODEL to use a different one without editing code.
 MODEL = "gemini-3.5-flash-lite"
 REQUEST_TIMEOUT_MS = 60_000  # a typical call takes a few seconds; never wait on a dead connection forever
+
+
+# Free-tier limit when this was written: 15 requests per minute per model. Stay just under it.
+# Paid keys can raise it with GEMINI_REQUESTS_PER_MINUTE (0 turns the throttle off).
+DEFAULT_REQUESTS_PER_MINUTE = 14
+MAX_RATE_LIMIT_RETRIES = 3
+MAX_RETRY_WAIT_SECONDS = 90.0  # a longer suggested wait means a daily quota, which retrying cannot fix
+PER_MINUTE_DEFAULT_WAIT_SECONDS = 20.0  # used when a per-minute 429 carries no "retry in" hint
+
+# Shared by every parser in the process: an evaluation builds several, and they share one quota.
+_last_call_at = [float("-inf")]
+
+
+def min_call_interval(env=os.environ) -> float:
+    """Seconds to leave between live calls, from GEMINI_REQUESTS_PER_MINUTE or the free-tier default."""
+    try:
+        per_minute = float(env.get("GEMINI_REQUESTS_PER_MINUTE") or DEFAULT_REQUESTS_PER_MINUTE)
+    except ValueError:
+        per_minute = DEFAULT_REQUESTS_PER_MINUTE
+    return 60.0 / per_minute if per_minute > 0 else 0.0
+
+
+def throttle(interval: float, clock=time.monotonic, sleep=time.sleep) -> None:
+    """Block until `interval` seconds have passed since the previous call, then record this one."""
+    if interval > 0:
+        wait = _last_call_at[0] + interval - clock()
+        if wait > 0:
+            sleep(wait)
+    _last_call_at[0] = clock()
+
+
+def rate_limit_wait(error: Exception) -> Optional[float]:
+    """Seconds to wait before retrying a per-minute 429, or None if retrying will not help.
+
+    Daily quotas, and any 429 whose suggested delay is long, return None so a run never looks hung.
+    """
+    message = " ".join(str(getattr(error, "message", error)).split())
+    if (getattr(error, "status_code", None) or getattr(error, "code", None)) != 429:
+        return None
+    match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", message, re.IGNORECASE)
+    if match and any(match.groups()):
+        hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
+        wait = hours * 3600 + minutes * 60 + seconds + 1.0
+    elif "per minute" in message.lower():
+        wait = PER_MINUTE_DEFAULT_WAIT_SECONDS
+    else:
+        return None
+    return wait if wait <= MAX_RETRY_WAIT_SECONDS else None
 
 
 def http_options() -> genai_types.HttpOptions:
@@ -130,13 +180,25 @@ def _validate(
     return profile, notes
 
 
-def make_gemini_parser(client=None, model: Optional[str] = None, fallback=parse_query):
+def make_gemini_parser(
+    client=None,
+    model: Optional[str] = None,
+    fallback=parse_query,
+    min_interval: Optional[float] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+):
     """Build a parse_fn(query, known_genres, known_moods) -> (profile, notes).
 
     `client` is a google.genai Client (or a test double with a compatible
     `interactions.create`). It is created lazily from the environment when omitted.
+
+    Live calls are spaced `min_interval` seconds apart (default: just under the free-tier
+    15 requests per minute) and a per-minute 429 is waited out and retried. An injected
+    `client` is not throttled unless `min_interval` is given, so tests stay fast.
     """
     state = {"client": client}
+    interval_override = min_interval
 
     def parse_fn(query: str, known_genres: Iterable[str], known_moods: Iterable[str]) -> Tuple[Dict, List[str]]:
         genres, moods = sorted(set(known_genres)), sorted(set(known_moods))
@@ -154,21 +216,34 @@ def make_gemini_parser(client=None, model: Optional[str] = None, fallback=parse_
                 # The SDK raises ValueError when no API key is configured.
                 return use_fallback("no API credentials")
 
-        try:
-            interaction = state["client"].interactions.create(
-                model=model or os.environ.get("GEMINI_MODEL") or MODEL,
-                system_instruction=build_system_prompt(genres, moods),
-                input=f"<request>{query}</request>",
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": ParsedProfile.model_json_schema(),
-                },
-            )
-        except API_ERRORS as error:
-            detail = " ".join(str(getattr(error, "message", error)).split())[:140]
-            code = getattr(error, "status_code", None) or getattr(error, "code", "")
-            return use_fallback(f"{type(error).__name__}{f' {code}' if code else ''}: {detail}")
+        if interval_override is not None:
+            interval = interval_override
+        else:
+            interval = min_call_interval() if client is None else 0.0
+
+        system_instruction = build_system_prompt(genres, moods)
+        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            throttle(interval, clock, sleep)
+            try:
+                interaction = state["client"].interactions.create(
+                    model=model or os.environ.get("GEMINI_MODEL") or MODEL,
+                    system_instruction=system_instruction,
+                    input=f"<request>{query}</request>",
+                    response_format={
+                        "type": "text",
+                        "mime_type": "application/json",
+                        "schema": ParsedProfile.model_json_schema(),
+                    },
+                )
+                break
+            except API_ERRORS as error:
+                wait = rate_limit_wait(error)
+                if wait is not None and attempt < MAX_RATE_LIMIT_RETRIES:
+                    sleep(wait)
+                    continue
+                detail = " ".join(str(getattr(error, "message", error)).split())[:140]
+                code = getattr(error, "status_code", None) or getattr(error, "code", "")
+                return use_fallback(f"{type(error).__name__}{f' {code}' if code else ''}: {detail}")
 
         status = getattr(interaction, "status", None)
         if status != "completed":

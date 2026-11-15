@@ -357,3 +357,97 @@ def test_a_used_up_daily_quota_falls_back_at_once_and_says_why():
     result, notes = run(FakeClient(error=error))
     assert_fell_back(result, notes)
     assert "429" in notes[0] and "500 requests per day" in notes[0]
+
+
+# ---- throttle and rate-limit retry ----
+
+
+class FlakyInteractions(FakeInteractions):
+    """Raises the queued errors one per call, then returns the response."""
+
+    def __init__(self, errors, response):
+        super().__init__(response=response)
+        self.errors = list(errors)
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.response
+
+
+def rate_limit(message):
+    return genai_errors.ClientError(429, {"error": {"code": 429, "message": message, "status": "RESOURCE_EXHAUSTED"}})
+
+
+def flaky_client(errors):
+    client = FakeClient()
+    client.interactions = FlakyInteractions(errors, reply())
+    return client
+
+
+def test_a_per_minute_429_is_waited_out_and_retried():
+    sleeps = []
+    client = flaky_client([rate_limit("Rate limit exceeded (limit: 15 requests per minute on Free Tier)")])
+    result, notes = run(client, sleep=sleeps.append)
+    assert len(client.interactions.calls) == 2
+    assert sleeps == [gemini_parser.PER_MINUTE_DEFAULT_WAIT_SECONDS]
+    assert not any("unavailable" in n for n in notes)
+    assert result["genre"] == "lofi"
+
+
+def test_a_429_with_a_retry_hint_waits_that_long_plus_a_margin():
+    sleeps = []
+    client = flaky_client([rate_limit("Please retry in 12.5s")])
+    run(client, sleep=sleeps.append)
+    assert sleeps == [13.5]
+
+
+def test_a_daily_quota_429_is_not_retried():
+    sleeps = []
+    client = flaky_client([rate_limit("Quota exceeded: 500 requests per day. Please retry in 15h14m22s")])
+    result, notes = run(client, sleep=sleeps.append)
+    assert len(client.interactions.calls) == 1 and sleeps == []
+    assert_fell_back(result, notes)
+
+
+def test_retries_stop_after_the_limit_and_fall_back():
+    sleeps = []
+    errors = [rate_limit("limit: 15 requests per minute")] * (gemini_parser.MAX_RATE_LIMIT_RETRIES + 1)
+    client = flaky_client(errors)
+    result, notes = run(client, sleep=sleeps.append)
+    assert len(client.interactions.calls) == gemini_parser.MAX_RATE_LIMIT_RETRIES + 1
+    assert len(sleeps) == gemini_parser.MAX_RATE_LIMIT_RETRIES
+    assert_fell_back(result, notes)
+
+
+def test_calls_are_spaced_by_the_minimum_interval(monkeypatch):
+    monkeypatch.setattr(gemini_parser, "_last_call_at", [float("-inf")])
+    now, sleeps = [100.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    parse = make_gemini_parser(client=FakeClient(response=reply()), min_interval=5.0, sleep=sleep, clock=lambda: now[0])
+    parse("calm music", GENRES, MOODS)
+    assert sleeps == []  # first call goes straight out
+    now[0] += 2.0
+    parse("calm music", GENRES, MOODS)
+    assert sleeps == [pytest.approx(3.0)]
+
+
+def test_an_injected_client_is_not_throttled_by_default(monkeypatch):
+    monkeypatch.setattr(gemini_parser, "_last_call_at", [float("-inf")])
+    sleeps = []
+    parse = make_gemini_parser(client=FakeClient(response=reply()), sleep=sleeps.append)
+    for _ in range(3):
+        parse("calm music", GENRES, MOODS)
+    assert sleeps == []
+
+
+def test_min_call_interval_reads_the_environment():
+    assert gemini_parser.min_call_interval({}) == pytest.approx(60 / 14)
+    assert gemini_parser.min_call_interval({"GEMINI_REQUESTS_PER_MINUTE": "60"}) == pytest.approx(1.0)
+    assert gemini_parser.min_call_interval({"GEMINI_REQUESTS_PER_MINUTE": "0"}) == 0.0
+    assert gemini_parser.min_call_interval({"GEMINI_REQUESTS_PER_MINUTE": "junk"}) == pytest.approx(60 / 14)
