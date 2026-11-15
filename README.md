@@ -33,7 +33,7 @@ The full diagram is in [diagrams/architecture.md](diagrams/architecture.md). Dat
 
    ```bash
    git clone https://github.com/SLyubar/applied-ai-system-project
-   cd applied-ai-system-final
+   cd applied-ai-system-project
    ```
 
 2. **Create and activate a virtual environment** (recommended).
@@ -351,7 +351,7 @@ With the keyword parser every low-confidence case failed, but a high rating was 
 
 ## Reflection
 
-This project taught me that AI can effectively be used as a thought partner, peer programmer, designer, and problem-solver. However, we cannot delegate everything to AI. A human has to be in the loop to test AI assumptions, validate the results, and retain discretion for overall decisions. If those conditions are met then AI will exponentially improve productivity and delivery outcomes.
+This project taught me that AI can effectively be used as a thought partner, peer programmer, designer, and problem-solver. However, we cannot delegate everything to AI. A human has to be in the loop to test AI assumptions, validate the results, and retain discretion for overall decisions. If those conditions are met then AI will exponentially improve productivity and delivery outcomes. The model_card.md expands on this reflection in detail.
 
 ## Project Files
 
