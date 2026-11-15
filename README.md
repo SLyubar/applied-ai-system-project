@@ -242,7 +242,7 @@ python -m src.main --query "asdkjh qwpoeiu zzzz"
 
 | Method | What it covers |
 |---|---|
-| Automated tests | 389 pytest tests for guardrails, scoring, both parsers, the retriever, confidence, the CLI, the feedback log, and the evaluation code itself. Gemini is replaced by a fake client, including the real error classes it raises. A GitHub Actions workflow runs them (not yet exercised, since it needs a push). |
+| Automated tests | 389 pytest tests for guardrails, scoring, both parsers, the retriever, confidence, the CLI, the feedback log, and the evaluation code itself. Gemini is replaced by a fake client, including the real error classes it raises. A GitHub Actions workflow runs them on Python 3.12 and 3.13, and its latest run passed. |
 | Evaluation harness | Ranking cases with graded relevance (ideal and acceptable songs) and forbidden songs; a case passes only if the top result is relevant, nothing forbidden appears, and an ideal song is in the top 3. Criteria were fixed before looking at results. Parser phrases, repeated runs with mean and range, and fallback detection so a keyword answer can't pass as a Gemini one. |
 | Robustness checks | 6 paraphrase groups (every wording must meet the expectation and agree on energy) and 12 adversarial cases (injection, other languages, gibberish, off-topic, very long input). |
 | Ablation | Drops or nudges each scoring weight and re-scores the profile cases. |
@@ -346,14 +346,12 @@ With the keyword parser every low-confidence case failed, but a high rating was 
 - **One author.** I drafted every golden-set judgment and the descriptions, so results reflect one person's taste; there is no second reviewer, and no human ratings have been collected.
 - **Small samples.** 32 ranking cases, 15 parser phrases, 16 free-text retrieval cases.
 - **Confidence cannot see a confident mistake**, as shown above.
-- **The GitHub Actions workflow has not run**, and cost is not tracked (only wall time).
+- **Cost is not tracked**, only wall time. The GitHub Actions workflow runs only the fake-client tests; the live Gemini evaluation is run by hand.
 - **The catalog is 80 fictional songs.** Nothing here says how this would behave on a real catalog.
 
 ## Reflection
 
-The original project taught me that a recommender is a set of design choices: which features to score, how to weight them, and who gets left out. Extending it taught me that adding an AI component, like an LLM or a retriever, doesn't remove those choices. It moves them. Using Gemini for language and keeping the ranking deterministic was a decision about where to trust a model and where to keep control. Planning the evaluation before writing the features made the project's goal clearer: the question isn't whether the new version feels smarter, it's whether it measurably does better than the baseline.
-
-> Revise this section in your own words after the implementation is finished.
+This project taught me that AI can effectively be used as a thought partner, peer programmer, designer, and problem-solver. However, we cannot delegate everything to AI. A human has to be in the loop to test AI assumptions, validate the results, and retain discretion for overall decisions. If those conditions are met then AI will exponentially improve productivity and delivery outcomes.
 
 ## Project Files
 
