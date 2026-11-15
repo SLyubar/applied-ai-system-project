@@ -236,7 +236,7 @@ python -m src.main --query "asdkjh qwpoeiu zzzz"
 
 ## Testing Summary
 
-**In short.** 389 automated tests pass (99% line coverage). Against a hand-built golden set of 32 ranking cases and 15 parser phrases, the keyword baseline passes 21/32 ranking cases and 11/15 phrases, and fails every non-English request. In live runs on the finished code (5 runs each, no answer fell back to the keyword parser), the Gemini parser passed 27.6/32 ranking cases and 13.6/15 phrases, and adding Gemini-embedding retrieval raised that to 30.2/32 and 14.0/15. Both configurations passed 12/12 adversarial cases in every run, including both prompt injections and four non-English requests, and recommended no forbidden songs. Gemini-embedding retrieval also raised free-text nDCG from 0.65 to 0.69-0.73 in a separate experiment, while TF-IDF retrieval lowered it to 0.54. Two failures repeat in every run: the "summer road trip" ranking case and the "Sad" paraphrase group. The confidence score now falls with pass rate for Gemini (high 97-98%, medium 60-84%), but it still cannot see a confident misreading by the keyword parser. A first attempt at these live runs hit the free tier's per-minute limit and mostly measured the keyword fallback; the parser now throttles itself and the reports below are from the rerun.
+**In short.** 389 automated tests pass (99% line coverage). Against a hand-built golden set of 32 ranking cases and 15 parser phrases, the keyword baseline passes 21/32 ranking cases and 11/15 phrases, and fails every non-English request. In live runs on the finished code (5 runs each, no answer fell back to the keyword parser), the Gemini parser passed 27.6/32 ranking cases and 13.6/15 phrases, and adding Gemini-embedding retrieval raised that to 30.2/32 and 14.0/15. Both configurations passed 12/12 adversarial cases in every run, including both prompt injections and four non-English requests, and recommended no forbidden songs. In a separate retrieval experiment (rerun on the finished code), Gemini-embedding retrieval gave free-text nDCG of 0.69-0.75 against a 0.68 baseline, a small gain that only the 10-song pool clearly shows, while TF-IDF retrieval lowered it to 0.47-0.61. Two failures repeat in every run: the "summer road trip" ranking case and the "Sad" paraphrase group. The confidence score now falls with pass rate for Gemini (high 97-98%, medium 60-84%), but it still cannot see a confident misreading by the keyword parser. A first attempt at these live runs hit the free tier's per-minute limit and mostly measured the keyword fallback; the parser now throttles itself and the reports below are from the rerun.
 
 ### How reliability is measured
 
@@ -310,14 +310,14 @@ Two earlier snapshots, [5 runs](reports/gemini_5runs.md) and [3 runs](reports/ge
 
 | Configuration | Cases passed | nDCG@5 |
 |---|---|---|
-| No retrieval | 11/16 | 0.65 |
-| TF-IDF, retrieve 20 then score | 8/16 | 0.54 |
-| Gemini embeddings, retrieve 10 then score | 13/16 | 0.73 |
-| Gemini embeddings, retrieve 20 then score | 14/16 | 0.69 |
-| Gemini embeddings, retrieve 40 then score | 12/16 | 0.68 |
+| No retrieval | 13/16 | 0.68 |
+| TF-IDF, retrieve 20 then score | 9/16 | 0.53 |
+| Gemini embeddings, retrieve 10 then score | 14/16 | 0.75 |
+| Gemini embeddings, retrieve 20 then score | 14/16 | 0.70 |
+| Gemini embeddings, retrieve 40 then score | 14/16 | 0.69 |
 | Gemini embeddings, retrieval only (no scorer) | 15/16 | 0.70 |
 
-Gemini embeddings help; TF-IDF hurts. The surprise is that retrieval alone passes the most cases, so for free-text requests the scorer adds little. The pool-size differences are within noise. I wrote both the song descriptions and the test queries, so their vocabulary overlaps in a way that favors retrieval, and 16 cases is a small sample.
+This is the second run of the experiment, on the finished code, with no parser answers falling back to keywords. The first run (earlier code) gave the same conclusions with slightly different numbers: baseline 11/16 and 0.65, Gemini retrieve-10 13/16 and 0.73, retrieve-40 12/16 and 0.68, TF-IDF retrieve-20 8/16 and 0.54. Retrieval-only scores were identical in both runs, because retrieval is deterministic; everything that moved depends on the parser, which varies between runs. That variation moved the baseline by 2 cases and 0.03 nDCG, which is as large as most of the gap between the baseline and Gemini retrieval, so the benefit of Gemini retrieval is modest: clear for the 10-song pool (+0.08 nDCG, 14 against 13 cases) and within noise for 20 and 40. TF-IDF hurts in both runs. Retrieval alone still passes the most cases, so for free-text requests the scorer adds little. I wrote both the song descriptions and the test queries, so their vocabulary overlaps in a way that favors retrieval, and 16 cases is a small sample.
 
 **Ablation** ([reports/ablation.md](reports/ablation.md)): dropping genre hurts most (nDCG 0.87 to 0.69), dropping mood least (to 0.83). The weights I chose are not the best on my own golden set (halving mood scores 0.95, equal weights 0.91), but tuning them to judgments I wrote myself would be overfitting, so I did not change them.
 
